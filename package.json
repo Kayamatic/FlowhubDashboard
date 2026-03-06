@@ -1,0 +1,11 @@
+{
+  "scripts": {
+    "start": "node flowhub-proxy-server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "node-fetch": "^3.3.2"
+  }
+}

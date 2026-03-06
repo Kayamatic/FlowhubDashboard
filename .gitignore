@@ -1,0 +1,8 @@
+.env
+node_modules/
+*.pkg
+*.zip
+*.png
+*.jsx
+.DS_Store
+.claude/

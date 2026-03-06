@@ -1,0 +1,902 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flowhub Analytics</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0a0a0a;color:#f0e8d8;font-family:'Courier New',monospace;height:100vh;display:flex;flex-direction:column;overflow:hidden;font-size:14px}
+::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:#444}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+.header{background:#141414;border-bottom:2px solid #333;padding:12px 22px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.logo{display:flex;align-items:center;gap:12px;font-size:14px;font-weight:bold;letter-spacing:.12em}
+.dot{width:9px;height:9px;border-radius:50%;background:#666}
+.dot.live{background:#5dcc8a;box-shadow:0 0 8px #5dcc8a}
+.badge{font-size:10px;padding:3px 10px;border-radius:2px;font-weight:bold;letter-spacing:.12em;border:1px solid #666;color:#999}
+.badge.live{border-color:#5dcc8a;color:#5dcc8a;background:#0d2018}
+.hdr-right{display:flex;gap:10px;align-items:center}
+.btn{font-family:inherit;font-size:11px;padding:5px 12px;background:transparent;border:1px solid #444;color:#aaa;cursor:pointer;border-radius:3px}
+.btn:hover{border-color:#c8922a;color:#c8922a}
+.key-bar{background:#111;border-bottom:2px solid #333;padding:9px 22px;display:flex;gap:10px}
+.key-bar input{flex:1;background:#1e1e1e;border:1px solid #444;color:#f0e8d8;padding:7px 12px;border-radius:3px;font-size:12px;font-family:inherit;outline:none}
+.key-bar button{background:#c8922a;border:none;color:#000;padding:7px 16px;border-radius:3px;cursor:pointer;font-size:12px;font-weight:bold;font-family:inherit}
+.body{display:flex;flex:1;overflow:hidden}
+.left{width:425px;border-right:2px solid #333;display:flex;flex-direction:column;overflow:hidden;flex-shrink:0}
+.tabs{display:flex;background:#141414;border-bottom:2px solid #333}
+.tab{flex:1;padding:10px 4px;font-size:11px;background:transparent;border:none;cursor:pointer;text-transform:uppercase;letter-spacing:.12em;color:#888;border-bottom:3px solid transparent;font-family:inherit}
+.tab.on{color:#c8922a;border-bottom-color:#c8922a}
+.panel{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:11px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.card{background:#1a1a1a;border:1px solid #333;border-left:4px solid #c8922a;padding:13px 14px;border-radius:5px}
+.card.g{border-left-color:#5dcc8a}.card.r{border-left-color:#e06060}
+.clabel{font-size:10px;color:#999;text-transform:uppercase;letter-spacing:.14em;margin-bottom:6px}
+.cval{font-size:22px;font-weight:bold;color:#f0e8d8}
+.csub{font-size:11px;color:#aaa;margin-top:4px}
+.box{background:#1a1a1a;border:1px solid #333;padding:14px;border-radius:5px}
+.redborder{border-color:#e06060 !important;border-width:2px !important}
+.boxtitle{font-size:11px;color:#aaa;text-transform:uppercase;letter-spacing:.14em;margin-bottom:10px}
+.boxtitle.red{color:#e06060}
+.row{display:flex;justify-content:space-between;font-size:12px;margin-bottom:7px;gap:8px;color:#ddd}
+.row span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.amber{color:#e0a830}.red{color:#e06060}.green{color:#5dcc8a}.muted{color:#888}
+.bar-wrap{display:flex;align-items:flex-end;gap:3px;height:56px}
+.bar-labels{display:flex;justify-content:space-between;margin-top:5px}
+.prog-row{margin-bottom:9px}
+.prog-hd{display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;color:#ddd}
+.prog-track{height:4px;background:#2a2a2a;border-radius:2px}
+.prog-fill{height:100%;background:#c8922a;border-radius:2px;opacity:.85}
+.right{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.chat-hd{padding:10px 18px;border-bottom:2px solid #333;background:#141414;font-size:11px;color:#aaa;letter-spacing:.14em;text-transform:uppercase}
+.quick-bar{display:flex;gap:7px;padding:9px 14px;overflow-x:auto;border-bottom:1px solid #333;flex-shrink:0}
+.qbtn{flex-shrink:0;padding:6px 13px;background:transparent;border:1px solid #444;color:#aaa;border-radius:20px;font-size:11px;cursor:pointer;white-space:nowrap;font-family:inherit}
+.qbtn:hover{border-color:#c8922a;color:#e0a830}
+.messages{flex:1;overflow-y:auto;padding:14px 18px}
+.msg{display:flex;margin-bottom:14px}
+.msg.user{justify-content:flex-end}
+.ai-icon{width:28px;height:28px;border-radius:50%;background:#6b4d15;display:flex;align-items:center;justify-content:center;font-size:10px;color:#e0a830;flex-shrink:0;margin-right:9px;margin-top:2px;font-weight:bold}
+.bubble{max-width:84%;padding:11px 14px;border-radius:10px 10px 10px 2px;font-size:13px;line-height:1.7;white-space:pre-wrap;background:#1a1a1a;border:1px solid #333;color:#f0e8d8}
+.bubble.user{border-radius:10px 10px 2px 10px;background:#1e1608;border-color:#6b4d15}
+.cursor{color:#c8922a;animation:blink 1s step-end infinite}
+.input-bar{padding:11px 14px;border-top:2px solid #333;display:flex;gap:10px;background:#141414;flex-shrink:0}
+.input-bar textarea{flex:1;background:#0a0a0a;border:1px solid #444;color:#f0e8d8;padding:10px 13px;border-radius:4px;font-size:13px;resize:none;line-height:1.5;font-family:inherit;outline:none}
+.input-bar textarea::placeholder{color:#666}
+.send-btn{background:#c8922a;border:none;color:#000;padding:10px 18px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;flex-shrink:0;font-family:inherit}
+.send-btn:disabled{background:#5a3f10;color:#888;cursor:not-allowed}
+.range-bar{background:#111;border-bottom:2px solid #333;padding:8px 10px;display:flex;flex-direction:column;gap:6px;flex-shrink:0}
+.rp-row{display:flex;gap:4px;align-items:center;flex-wrap:wrap}
+.rc-lbl{font-size:10px;color:#555;text-transform:uppercase;letter-spacing:.1em}
+.rpbtn{font-family:inherit;font-size:10px;padding:3px 8px;background:transparent;border:1px solid #3a3a3a;color:#777;border-radius:3px;cursor:pointer;white-space:nowrap;letter-spacing:.08em;text-transform:uppercase}
+.rpbtn:hover,.rpbtn.on{border-color:#c8922a;color:#c8922a;background:#1a1200}
+.rc-row{display:flex;gap:5px;align-items:center;flex-wrap:wrap}
+.rc-row input[type=date],.rc-row input[type=time]{background:#1e1e1e;border:1px solid #444;color:#f0e8d8;padding:3px 6px;border-radius:3px;font-family:inherit;font-size:11px;outline:none;color-scheme:dark}
+.rc-row .go-btn{background:#c8922a;border:none;color:#000;padding:3px 10px;border-radius:3px;cursor:pointer;font-size:11px;font-weight:bold;font-family:inherit}
+.see-more-btn{font-family:inherit;font-size:10px;padding:2px 8px;background:transparent;border:1px solid #444;color:#888;border-radius:3px;cursor:pointer;letter-spacing:.08em;text-transform:uppercase;flex-shrink:0}
+.see-more-btn:hover{border-color:#c8922a;color:#c8922a}
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:1000;align-items:center;justify-content:center}
+.modal-overlay.open{display:flex}
+.modal-box{background:#1a1a1a;border:1px solid #444;border-radius:6px;width:92%;max-width:560px;max-height:82vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,.6)}
+.modal-hd{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid #2e2e2e;flex-shrink:0}
+.modal-title{font-size:11px;color:#aaa;text-transform:uppercase;letter-spacing:.14em}
+.modal-close{background:transparent;border:none;color:#666;font-size:20px;cursor:pointer;line-height:1;padding:0 2px}
+.modal-close:hover{color:#f0e8d8}
+.modal-body{overflow-y:auto;padding:10px 18px 18px}
+.modal-row{display:flex;gap:10px;padding:9px 0;border-bottom:1px solid #222;font-size:12px;align-items:baseline}
+.modal-row:last-child{border-bottom:none}
+.modal-rank{color:#555;width:20px;flex-shrink:0;text-align:right}
+.modal-name{flex:1;color:#f0e8d8;line-height:1.45;word-break:break-word}
+.modal-units{color:#777;white-space:nowrap;font-size:11px}
+.modal-rev{color:#e0a830;font-weight:bold;white-space:nowrap;min-width:60px;text-align:right}
+.modal-inv-hd{display:grid;grid-template-columns:1fr 90px 55px 55px;gap:6px;font-size:10px;color:#666;text-transform:uppercase;letter-spacing:.1em;padding:0 0 7px;border-bottom:1px solid #2e2e2e;margin-bottom:2px}
+.modal-inv-row{display:grid;grid-template-columns:1fr 90px 55px 55px;gap:6px;padding:7px 0;border-bottom:1px solid #1e1e1e;font-size:12px;align-items:start}
+.modal-inv-row:last-child{border-bottom:none}
+.inv-name{color:#f0e8d8;line-height:1.4;word-break:break-word}
+.inv-brand{font-size:10px;color:#666;margin-top:2px}
+.inv-sku{color:#666;font-size:11px;word-break:break-all;padding-top:1px}
+.inv-qty{font-weight:bold;text-align:right;padding-top:1px}
+.inv-price{color:#aaa;text-align:right;padding-top:1px}
+.cat-link{background:transparent;border:none;color:#f0e8d8;cursor:pointer;font-family:inherit;font-size:inherit;padding:0;text-align:left;text-decoration-line:underline;text-decoration-color:#444}
+.cat-link:hover{color:#c8922a;text-decoration-color:#c8922a}
+.chat-chart{background:#0f0f0f;border:1px solid #2a2a2a;border-radius:4px;padding:12px 12px 8px;margin-top:2px;width:100%}
+.chat-chart-title{font-size:10px;color:#666;text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px}
+.chat-chart-bars{display:flex;align-items:flex-end;gap:2px;height:64px}
+.chat-bar-col{display:flex;flex-direction:column;justify-content:flex-end;flex:1;min-width:0;height:100%}
+.chat-bar{width:100%;min-width:2px;background:linear-gradient(180deg,#c8922a,#6b4d15);border-radius:1px 1px 0 0}
+.chat-chart-xlabels{display:flex;justify-content:space-between;margin-top:5px;font-size:9px;color:#555}
+.msg-chart{padding-left:37px;margin-bottom:14px}
+
+/* ── Mobile nav (hidden on desktop) ───────────────────────────── */
+.mobile-nav{display:none}
+
+/* ── Responsive ───────────────────────────────────────────────── */
+@media(max-width:767px){
+  /* Header: compact & no-overflow */
+  .header{padding:8px 12px;gap:6px}
+  .logo{font-size:11px;gap:7px;min-width:0;flex:1}
+  .logo>span:first-of-type{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #sync{display:none}
+  .hdr-right{gap:6px;flex-shrink:0}
+  .btn{font-size:10px;padding:4px 8px}
+  #lowbadge{font-size:9px;padding:3px 6px}
+
+  /* Mobile view toggle nav */
+  .mobile-nav{display:flex;background:#141414;border-bottom:2px solid #333;flex-shrink:0}
+  .mnav-btn{flex:1;padding:11px 4px;font-size:11px;background:transparent;border:none;border-bottom:3px solid transparent;color:#888;cursor:pointer;text-transform:uppercase;letter-spacing:.12em;font-family:inherit}
+  .mnav-btn.on{color:#c8922a;border-bottom-color:#c8922a}
+
+  /* Layout: fill viewport, one panel at a time */
+  .body{flex-direction:column}
+  .left{width:100%;border-right:none;flex:1;min-height:0}
+  .right{flex:1;min-height:0}
+  .mob-hidden{display:none!important}
+
+  /* Panel */
+  .panel{padding:10px;gap:9px}
+  .card{padding:11px 12px}
+  .cval{font-size:20px}
+  .grid2{grid-template-columns:1fr 1fr}
+
+  /* Range bar */
+  .range-bar{padding:6px 8px}
+  .rpbtn{font-size:9px;padding:3px 6px}
+  .rc-row input[type=date],.rc-row input[type=time]{font-size:10px;padding:2px 5px}
+
+  /* Chat */
+  .chat-hd{padding:8px 12px;font-size:10px}
+  .quick-bar{padding:6px 10px;gap:5px}
+  .qbtn{font-size:10px;padding:5px 10px}
+  .messages{padding:10px 12px}
+  .bubble{max-width:94%;font-size:12px;padding:9px 11px}
+  .input-bar{padding:8px 10px;gap:8px}
+  .input-bar textarea{font-size:12px;padding:8px 10px}
+  .msg-chart{padding-left:0}
+
+  /* Modal */
+  .modal-box{width:96%;max-height:90vh}
+  .modal-inv-hd,.modal-inv-row{grid-template-columns:1fr 60px}
+  .modal-inv-hd>span:nth-child(n+3),.modal-inv-row>div:nth-child(n+3){display:none}
+}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="logo">
+    <div class="dot" id="dot"></div>
+    <span>FLOWHUB ANALYTICS</span>
+    <span class="badge" id="badge">CONNECTING</span>
+    <span style="font-size:11px;color:#888;margin-left:4px" id="sync"></span>
+  </div>
+  <div class="hdr-right">
+    <span class="badge" style="border-color:#e06060;color:#e06060;background:#2a0f0f;display:none" id="lowbadge"></span>
+    <button class="btn" id="keyBtn" onclick="toggleKey()">SET AI KEY</button>
+  </div>
+</div>
+<div class="mobile-nav" id="mobileNav">
+  <button class="mnav-btn on" id="mnav-data" onclick="setMobileView('data')">Dashboard</button>
+  <button class="mnav-btn" id="mnav-chat" onclick="setMobileView('chat')">AI Chat</button>
+</div>
+<div class="key-bar" id="keyBar" style="display:none">
+  <input type="password" id="keyInput" placeholder="Anthropic API key  sk-ant-...">
+  <button onclick="saveKey()">SAVE</button>
+</div>
+<div class="body">
+  <div class="left">
+    <div class="tabs">
+      <button class="tab on" id="t-sales" onclick="setTab('sales')">Sales</button>
+      <button class="tab" id="t-inventory" onclick="setTab('inventory')">Inventory</button>
+      <button class="tab" id="t-customers" onclick="setTab('customers')">Customers</button>
+    </div>
+    <div class="range-bar" id="rangeBar">
+      <div class="rp-row">
+        <span class="rc-lbl" style="margin-right:4px">Range:</span>
+        <button class="rpbtn on" id="rp-default" onclick="setPreset('default')">All</button>
+        <button class="rpbtn" id="rp-today" onclick="setPreset('today')">Today</button>
+        <button class="rpbtn" id="rp-yesterday" onclick="setPreset('yesterday')">Yest</button>
+        <button class="rpbtn" id="rp-week" onclick="setPreset('week')">7d</button>
+        <button class="rpbtn" id="rp-month" onclick="setPreset('month')">30d</button>
+        <button class="rpbtn" id="rp-custom" onclick="setPreset('custom')">Custom…</button>
+      </div>
+      <div class="rc-row" id="rcRow" style="display:none">
+        <input type="date" id="rStart"><input type="time" id="rStartT" value="00:00"><span class="rc-lbl">EST</span>
+        <span class="rc-lbl">→</span>
+        <input type="date" id="rEnd"><input type="time" id="rEndT" value="23:59"><span class="rc-lbl">EST</span>
+        <button class="go-btn" onclick="applyCustom()">GO</button>
+      </div>
+    </div>
+    <div class="panel" id="panel"><div class="card"><div class="clabel">Loading</div><div class="cval">...</div></div></div>
+  </div>
+  <div class="right">
+    <div class="chat-hd">Ask anything about your store</div>
+    <div class="quick-bar" id="quickBar"></div>
+    <div class="messages" id="messages"></div>
+    <div class="input-bar">
+      <textarea id="chatInput" rows="1" placeholder="Ask about your sales, inventory, customers..." onkeydown="handleKey(event)"></textarea>
+      <button class="send-btn" id="sendBtn" onclick="sendChat()">ASK</button>
+    </div>
+  </div>
+</div>
+<!-- Bar chart tooltip -->
+<div id="barTip" style="display:none;position:fixed;background:#1e1e1e;border:1px solid #555;color:#f0e8d8;font-size:11px;font-family:'Courier New',monospace;padding:5px 10px;border-radius:3px;pointer-events:none;z-index:600;white-space:nowrap;letter-spacing:.04em"></div>
+<!-- Top Products modal -->
+<div class="modal-overlay" id="topModal" onclick="if(event.target===this)this.classList.remove('open')">
+  <div class="modal-box">
+    <div class="modal-hd">
+      <span class="modal-title" id="modalTitle">Top 10 Products &mdash; This Month</span>
+      <button class="modal-close" onclick="document.getElementById('topModal').classList.remove('open')">&times;</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+<script>
+var SD = null, defaultSD = null, aiKey = '', currentTab = 'sales', chatHistory = [], busy = false;
+var activePreset = 'default';
+var CACHE_KEY = 'flowhub_cache', CACHE_TTL = 3 * 60 * 1000;
+function loadCache() {
+  try { var raw = localStorage.getItem(CACHE_KEY); if (!raw) return null; var obj = JSON.parse(raw); if (Date.now() - obj.ts > CACHE_TTL) return null; return obj.sd; } catch(e) { return null; }
+}
+function saveCache(sd) {
+  try { localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), sd: sd })); } catch(e) {}
+}
+
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+var QUICK = ['What needs attention right now?','Top customers this month','Busiest hours by day of week (last 90 days)','Top 10 products last 30 days','Revenue trend last 14 days','Who is at churn risk?'];
+
+function toggleKey() { var b = document.getElementById('keyBar'); b.style.display = b.style.display === 'none' ? 'flex' : 'none'; }
+function saveKey() { aiKey = document.getElementById('keyInput').value.trim(); localStorage.setItem('flowhub_ai_key', aiKey); document.getElementById('keyBtn').textContent = aiKey ? 'AI KEY SET' : 'SET AI KEY'; document.getElementById('keyBar').style.display = 'none'; }
+function setTab(t) { currentTab = t; ['sales','inventory','customers'].forEach(function(x) { document.getElementById('t-' + x).className = 'tab' + (x === t ? ' on' : ''); }); document.getElementById('rangeBar').style.display = t === 'sales' ? '' : 'none'; renderPanel(); }
+
+function fmtMoney(n) {
+  if (n >= 1000) return '$' + (n / 1000).toFixed(1) + 'k';
+  return '$' + n.toFixed(2);
+}
+
+function localDateStr(d) { return d.toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); }
+function estToISO(dateStr, timeStr) {
+  // Converts a date+time expressed in America/New_York to a UTC ISO string.
+  // Strategy: interpret the input as UTC (naiveUTC), measure how far NY
+  // clock differs from it at that moment, then apply the inverse offset.
+  var naiveUTC = new Date(dateStr + 'T' + timeStr + 'Z');
+  var nyDisplay = naiveUTC.toLocaleString('sv', { timeZone: 'America/New_York' }).replace(' ', 'T');
+  var offsetMs  = naiveUTC.getTime() - new Date(nyDisplay + 'Z').getTime();
+  return new Date(naiveUTC.getTime() + offsetMs).toISOString();
+}
+// Returns the 0-23 hour of an ISO timestamp in America/New_York.
+// Uses the 'sv' locale which produces "YYYY-MM-DD HH:MM:SS" — reliable across browsers.
+function nyHour(isoStr) {
+  var s = new Date(isoStr).toLocaleString('sv', { timeZone: 'America/New_York' });
+  return parseInt(s.split(' ')[1], 10);
+}
+
+function hrLbl(i) { var h = i + 9; return h < 12 ? h + 'am' : h === 12 ? '12pm' : (h - 12) + 'pm'; }
+function showBarTip(e, t) {
+  var tip = document.getElementById('barTip');
+  tip.textContent = t;
+  tip.style.display = 'block';
+  var tw = tip.offsetWidth, th = tip.offsetHeight;
+  var x = e.clientX - tw / 2;
+  if (x < 4) x = 4;
+  if (x + tw > window.innerWidth - 4) x = window.innerWidth - tw - 4;
+  tip.style.left = x + 'px';
+  tip.style.top = (e.clientY - th - 10) + 'px';
+}
+function hideBarTip() { document.getElementById('barTip').style.display = 'none'; }
+function mkLineSvg(counts, maxCount, n) {
+  var pts = counts.map(function(c, i) {
+    return ((i+0.5)/n*100).toFixed(2) + ',' + (56-Math.max(4,(c/maxCount)*52)).toFixed(2);
+  }).join(' ');
+  var s = '<svg style="position:absolute;top:0;left:0;width:100%;height:56px;pointer-events:none;overflow:visible" viewBox="0 0 100 56" preserveAspectRatio="none">';
+  s += '<polyline points="' + pts + '" fill="none" stroke="#4a9edd" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>';
+  counts.forEach(function(c, i) {
+    var x = ((i+0.5)/n*100).toFixed(2), y = (56-Math.max(4,(c/maxCount)*52)).toFixed(2);
+    s += '<circle cx="' + x + '" cy="' + y + '" r="1.8" fill="#4a9edd" vector-effect="non-scaling-stroke"/>';
+  });
+  return s + '</svg>';
+}
+
+function setPreset(p) {
+  ['default','today','yesterday','week','month','custom'].forEach(function(x) {
+    var b = document.getElementById('rp-' + x); if (b) b.className = 'rpbtn' + (x === p ? ' on' : '');
+  });
+  activePreset = p;
+  document.getElementById('rcRow').style.display = p === 'custom' ? 'flex' : 'none';
+  if (p === 'custom') return;
+  if (p === 'default') { SD = defaultSD; renderPanel(); return; }
+  var now = new Date(), start, end = now.toISOString(), label;
+  if (p === 'today') {
+    start = estToISO(localDateStr(now), '00:00:00'); label = 'Today';
+  } else if (p === 'yesterday') {
+    var yStr = localDateStr(new Date(now - 86400000));
+    start = estToISO(yStr, '00:00:00'); end = estToISO(yStr, '23:59:59'); label = 'Yesterday';
+  } else if (p === 'week') {
+    start = estToISO(localDateStr(new Date(now - 7 * 86400000)), '00:00:00'); label = 'Last 7 Days';
+  } else if (p === 'month') {
+    start = estToISO(localDateStr(new Date(now - 30 * 86400000)), '00:00:00'); label = 'Last 30 Days';
+  }
+  fetchRange(start, end, label);
+}
+
+function applyCustom() {
+  var s = document.getElementById('rStart').value, st = document.getElementById('rStartT').value || '00:00';
+  var e = document.getElementById('rEnd').value,   et = document.getElementById('rEndT').value   || '23:59';
+  if (!s || !e) { alert('Please set both a start and end date.'); return; }
+  var startISO = estToISO(s, st + ':00'), endISO = estToISO(e, et + ':59');
+  if (new Date(startISO) > new Date(endISO)) { alert('Start must be before end.'); return; }
+  fetchRange(startISO, endISO, s + ' ' + st + ' \u2192 ' + e + ' ' + et);
+}
+
+async function fetchRange(startISO, endISO, label) {
+  if (!defaultSD) {
+    document.getElementById('sync').textContent = 'waiting for data\u2026 try again in a moment';
+    return;
+  }
+  document.getElementById('panel').innerHTML = '<div class="card"><div class="clabel">Loading ' + esc(label) + '\u2026</div><div class="cval muted" style="font-size:16px">Fetching orders</div></div>';
+  try {
+    // Use date-only strings for the API (Flowhub may not parse ISO datetimes);
+    // the client-side filter below handles precision within those dates.
+    var apiStart = startISO.slice(0, 10);
+    var apiEnd   = endISO.slice(0, 10);
+    var r = await fetch('/api/orders?start_date=' + apiStart + '&end_date=' + apiEnd);
+    var raw = await r.json();
+    var orders = (raw.orders || (Array.isArray(raw) ? raw : [])).filter(function(o) { return o.orderStatus === 'sold'; });
+    var s0 = new Date(startISO), s1 = new Date(endISO);
+    orders = orders.filter(function(o) { if (!o.completedOn) return false; var d = new Date(o.completedOn); return d >= s0 && d <= s1; });
+    // Post-discount, pre-tax: subTotal minus any discounts applied
+    var rev = orders.reduce(function(a, o) { if (!o.totals) return a; return a + (o.totals.subTotal || 0) - (o.totals.totalDiscounts || 0); }, 0);
+    var cnt = orders.length, avg = cnt ? rev / cnt : 0;
+    var spanDays = (s1 - s0) / 86400000;
+    var chart;
+    if (spanDays <= 2) {
+      var hm = [0,0,0,0,0,0,0,0,0,0,0,0], hc = [0,0,0,0,0,0,0,0,0,0,0,0];
+      orders.forEach(function(o) { var h = nyHour(o.completedOn); if (h >= 9 && h <= 20) { hm[h-9] += (o.totals ? (o.totals.subTotal || 0) - (o.totals.totalDiscounts || 0) : 0); hc[h-9]++; } });
+      chart = { type:'hourly', data:hm, countData:hc };
+    } else {
+      var dm = {}, dc = {};
+      orders.forEach(function(o) { var d = new Date(o.completedOn).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); dm[d] = (dm[d]||0) + (o.totals ? (o.totals.subTotal || 0) - (o.totals.totalDiscounts || 0) : 0); dc[d] = (dc[d]||0) + 1; });
+      chart = { type:'daily', data:dm, countData:dc };
+    }
+    var pm = {};
+    orders.forEach(function(o) { (o.itemsInCart||[]).forEach(function(i) { var n = i.productName||'Unknown'; if (!pm[n]) pm[n] = {rev:0,units:0}; pm[n].rev += (i.totalPrice||0); pm[n].units += (i.quantity||1); }); });
+    var top = Object.keys(pm).map(function(k) { return { name:k, rev:Math.round(pm[k].rev), units:pm[k].units }; }).sort(function(a,b) { return b.rev-a.rev; }).slice(0,10);
+    SD = Object.assign({}, defaultSD, { rangeRev:+rev.toFixed(2), rangeCount:cnt, rangeAvg:+avg.toFixed(2), rangeChart:chart, rangeTopProducts:top, rangeLabel:label });
+    renderPanel();
+  } catch(e) {
+    document.getElementById('panel').innerHTML = '<div class="card r"><div class="clabel">Error</div><div class="cval muted" style="font-size:14px">' + esc(e.message) + '</div></div>';
+  }
+}
+
+function renderPanel() {
+  if (!SD) return;
+  var h = '';
+  if (currentTab === 'sales') {
+    if (SD.salesReady === false) {
+      h += '<div class="card"><div class="clabel">Sales</div><div class="cval muted" style="font-size:15px">Loading orders\u2026</div><div class="csub">Inventory &amp; customers ready &#x2713;</div></div>';
+    } else if (activePreset !== 'default' && SD.rangeRev !== undefined) {
+      var rl = esc(SD.rangeLabel || 'Custom Range');
+      h += '<div class="grid2">';
+      h += '<div class="card"><div class="clabel">' + rl + ' Revenue</div><div class="cval">' + fmtMoney(SD.rangeRev) + '</div><div class="csub">' + SD.rangeCount + ' transactions</div></div>';
+      h += '<div class="card g"><div class="clabel">Avg Basket</div><div class="cval">$' + SD.rangeAvg.toFixed(2) + '</div><div class="csub">per visit</div></div>';
+      h += '</div>';
+      if (SD.rangeChart) {
+        var cd = SD.rangeChart.data;
+        if (SD.rangeChart.type === 'hourly') {
+          var mx = Math.max.apply(null, cd.concat([1]));
+          var cc = SD.rangeChart.countData || [], mxc = cc.length ? Math.max.apply(null, cc.concat([1])) : 1;
+          h += '<div class="box"><div class="boxtitle" style="display:flex;justify-content:space-between;align-items:center"><span>Sales by Hour \u2014 ' + rl + '</span><span style="font-size:9px;color:#555"><span style="color:#c8922a">\u2588</span> rev &nbsp;<span style="color:#4a9edd">\u2014</span> txns</span></div><div style="position:relative"><div class="bar-wrap">';
+          cd.forEach(function(v, i) { var p=v/mx; var cnt=cc[i]||0; var tip=hrLbl(i)+':  '+fmtMoney(v)+(cnt?' | '+cnt+' txns':''); h+='<div style="flex:1" data-tip="' + tip + '" onmouseenter="showBarTip(event,this.dataset.tip)" onmouseleave="hideBarTip()"><div style="width:100%;border-radius:2px 2px 0 0;height:'+Math.max(4,p*52)+'px;background:linear-gradient(180deg,#c8922a,#6b4d15);opacity:'+(0.4+p*0.6)+'"></div></div>'; });
+          h += '</div>' + (cc.length ? mkLineSvg(cc, mxc, 12) : '') + '</div><div class="bar-labels"><span style="font-size:10px" class="muted">9am</span><span style="font-size:10px" class="muted">8pm</span></div></div>';
+          if (cc.length) {
+            var ca = cd.map(function(r, i) { return cc[i] ? r / cc[i] : 0; });
+            var mxa = Math.max.apply(null, ca.concat([1]));
+            h += '<div class="box"><div class="boxtitle">Avg Basket by Hour \u2014 ' + rl + '</div><div class="bar-wrap">';
+            ca.forEach(function(v, i) { var p=v/mxa; h+='<div style="flex:1" data-tip="' + hrLbl(i) + ': $' + v.toFixed(2) + ' avg" onmouseenter="showBarTip(event,this.dataset.tip)" onmouseleave="hideBarTip()"><div style="width:100%;border-radius:2px 2px 0 0;height:'+Math.max(4,p*52)+'px;background:linear-gradient(180deg,#c084fc,#6b21a8);opacity:'+(0.4+p*0.6)+'"></div></div>'; });
+            h += '</div><div class="bar-labels"><span style="font-size:10px" class="muted">9am</span><span style="font-size:10px" class="muted">8pm</span></div></div>';
+          }
+        } else {
+          var keys = Object.keys(cd).sort(), vals = keys.map(function(k){return cd[k];}), mx = Math.max.apply(null,vals.concat([1]));
+          var dcc = SD.rangeChart.countData || {}, dcvals = keys.map(function(k){return dcc[k]||0;}), mxc = Math.max.apply(null, dcvals.concat([1]));
+          h += '<div class="box"><div class="boxtitle" style="display:flex;justify-content:space-between;align-items:center"><span>Sales by Day \u2014 ' + rl + '</span><span style="font-size:9px;color:#555"><span style="color:#5dcc8a">\u2588</span> rev &nbsp;<span style="color:#4a9edd">\u2014</span> txns</span></div><div style="position:relative"><div class="bar-wrap">';
+          vals.forEach(function(v, i) { var p=v/mx; var cnt=dcvals[i]||0; var tip=(keys[i]||'')+':  '+fmtMoney(v)+(cnt?' | '+cnt+' txns':''); h+='<div style="flex:1" data-tip="' + tip + '" onmouseenter="showBarTip(event,this.dataset.tip)" onmouseleave="hideBarTip()"><div style="width:100%;border-radius:2px 2px 0 0;height:'+Math.max(4,p*52)+'px;background:linear-gradient(180deg,#5dcc8a,#1a5e35);opacity:'+(0.4+p*0.6)+'"></div></div>'; });
+          h += '</div>' + mkLineSvg(dcvals, mxc, dcvals.length) + '</div><div class="bar-labels"><span style="font-size:10px" class="muted">'+(keys[0]?keys[0].slice(5):'')+'</span><span style="font-size:10px" class="muted">'+(keys[keys.length-1]?keys[keys.length-1].slice(5):'')+'</span></div></div>';
+          var da = keys.map(function(k) { var cnt = dcc[k] || 0; return cnt ? cd[k] / cnt : 0; });
+          var mxa = Math.max.apply(null, da.concat([1]));
+          h += '<div class="box"><div class="boxtitle">Avg Basket by Day \u2014 ' + rl + '</div><div class="bar-wrap">';
+          da.forEach(function(v, i) { var p=v/mxa; h+='<div style="flex:1" data-tip="' + (keys[i]||'') + ': $' + v.toFixed(2) + ' avg" onmouseenter="showBarTip(event,this.dataset.tip)" onmouseleave="hideBarTip()"><div style="width:100%;border-radius:2px 2px 0 0;height:'+Math.max(4,p*52)+'px;background:linear-gradient(180deg,#c084fc,#6b21a8);opacity:'+(0.4+p*0.6)+'"></div></div>'; });
+          h += '</div><div class="bar-labels"><span style="font-size:10px" class="muted">'+(keys[0]?keys[0].slice(5):'')+'</span><span style="font-size:10px" class="muted">'+(keys[keys.length-1]?keys[keys.length-1].slice(5):'')+'</span></div></div>';
+        }
+      }
+      if (SD.rangeTopProducts && SD.rangeTopProducts.length) {
+        h += '<div class="box"><div class="boxtitle" style="display:flex;justify-content:space-between;align-items:center"><span>Top Products \u2014 ' + rl + '</span><button class="see-more-btn" onclick="openRangeProducts()">See More</button></div>';
+        SD.rangeTopProducts.slice(0, 5).forEach(function(p,i) { h+='<div class="row"><span><span class="muted">'+(i+1)+'.&nbsp;</span>'+esc(p.name)+'</span><span class="amber">$'+p.rev.toLocaleString()+'</span></div>'; });
+        h += '</div>';
+      }
+    } else {
+      var avg = SD.todayCount ? (SD.todayRev / SD.todayCount).toFixed(2) : '0.00';
+      h += '<div class="grid2">';
+      h += '<div class="card"><div class="clabel">Today Revenue</div><div class="cval">' + fmtMoney(SD.todayRev) + '</div><div class="csub">' + SD.todayCount + ' transactions</div></div>';
+      h += '<div class="card g"><div class="clabel">Avg Basket</div><div class="cval">$' + avg + '</div><div class="csub">per visit</div></div>';
+      h += '<div class="card"><div class="clabel">This Week</div><div class="cval">' + fmtMoney(SD.weekRev) + '</div><div class="csub">' + SD.weekCount + ' transactions</div></div>';
+      h += '<div class="card"><div class="clabel">This Month</div><div class="cval">' + fmtMoney(SD.monthRev) + '</div><div class="csub">' + SD.monthCount + ' transactions</div></div>';
+      h += '</div>';
+      var mx = Math.max.apply(null, SD.hourly.concat([1]));
+      var mxc = SD.hourlyCount ? Math.max.apply(null, SD.hourlyCount.concat([1])) : 1;
+      h += '<div class="box"><div class="boxtitle" style="display:flex;justify-content:space-between;align-items:center"><span>Sales by Hour \u2014 Today</span><span style="font-size:9px;color:#555"><span style="color:#c8922a">\u2588</span> rev &nbsp;<span style="color:#4a9edd">\u2014</span> txns</span></div><div style="position:relative"><div class="bar-wrap">';
+      SD.hourly.forEach(function(s, i) {
+        var pct = s / mx, cnt = SD.hourlyCount ? SD.hourlyCount[i] : 0;
+        var tip = hrLbl(i) + ':  ' + fmtMoney(s) + (cnt ? ' | ' + cnt + ' txns' : '');
+        h += '<div style="flex:1" data-tip="' + tip + '" onmouseenter="showBarTip(event,this.dataset.tip)" onmouseleave="hideBarTip()"><div style="width:100%;border-radius:2px 2px 0 0;height:' + Math.max(4, pct * 52) + 'px;background:linear-gradient(180deg,#c8922a,#6b4d15);opacity:' + (0.4 + pct * 0.6) + '"></div></div>';
+      });
+      h += '</div>' + (SD.hourlyCount ? mkLineSvg(SD.hourlyCount, mxc, 12) : '') + '</div><div class="bar-labels"><span style="font-size:10px" class="muted">9am</span><span style="font-size:10px" class="muted">8pm</span></div></div>';
+      if (SD.hourlyCount) {
+        var ha = SD.hourly.map(function(r, i) { return SD.hourlyCount[i] ? r / SD.hourlyCount[i] : 0; });
+        var mxa = Math.max.apply(null, ha.concat([1]));
+        h += '<div class="box"><div class="boxtitle">Avg Basket by Hour \u2014 Today</div><div class="bar-wrap">';
+        ha.forEach(function(v, i) { var p=v/mxa; h+='<div style="flex:1" data-tip="' + hrLbl(i) + ': $' + v.toFixed(2) + ' avg" onmouseenter="showBarTip(event,this.dataset.tip)" onmouseleave="hideBarTip()"><div style="width:100%;border-radius:2px 2px 0 0;height:'+Math.max(4,p*52)+'px;background:linear-gradient(180deg,#c084fc,#6b21a8);opacity:'+(0.4+p*0.6)+'"></div></div>'; });
+        h += '</div><div class="bar-labels"><span style="font-size:10px" class="muted">9am</span><span style="font-size:10px" class="muted">8pm</span></div></div>';
+      }
+      if (SD.topProductsToday && SD.topProductsToday.length) {
+        h += '<div class="box"><div class="boxtitle" style="display:flex;justify-content:space-between;align-items:center"><span>Top Products - Today</span><button class="see-more-btn" onclick="openTopProducts(\'topProductsToday\',\'Top 10 Products \u2014 Today\')">See More</button></div>';
+        SD.topProductsToday.slice(0, 5).forEach(function(p, i) {
+          h += '<div class="row"><span><span class="muted">' + (i + 1) + '.&nbsp;</span>' + esc(p.name) + '</span><span class="amber">$' + p.rev.toLocaleString() + '</span></div>';
+        });
+        h += '</div>';
+      }
+      if (SD.topProductsWeek && SD.topProductsWeek.length) {
+        h += '<div class="box"><div class="boxtitle" style="display:flex;justify-content:space-between;align-items:center"><span>Top Products - This Week</span><button class="see-more-btn" onclick="openTopProducts(\'topProductsWeek\',\'Top 10 Products \u2014 This Week\')">See More</button></div>';
+        SD.topProductsWeek.slice(0, 5).forEach(function(p, i) {
+          h += '<div class="row"><span><span class="muted">' + (i + 1) + '.&nbsp;</span>' + esc(p.name) + '</span><span class="amber">$' + p.rev.toLocaleString() + '</span></div>';
+        });
+        h += '</div>';
+      }
+      if (SD.topProducts.length) {
+        h += '<div class="box"><div class="boxtitle" style="display:flex;justify-content:space-between;align-items:center"><span>Top Products - This Month</span><button class="see-more-btn" onclick="openTopProducts(\'topProducts\',\'Top 10 Products \u2014 This Month\')">See More</button></div>';
+        SD.topProducts.slice(0, 5).forEach(function(p, i) {
+          h += '<div class="row"><span><span class="muted">' + (i + 1) + '.&nbsp;</span>' + esc(p.name) + '</span><span class="amber">$' + p.rev.toLocaleString() + '</span></div>';
+        });
+        h += '</div>';
+      }
+    }
+  }
+  if (currentTab === 'inventory') {
+    h += '<div class="grid2"><div class="card g"><div class="clabel">Total SKUs (In Stock)</div><div class="cval">' + SD.totalSkus + '</div><div class="csub">' + SD.cannabisSkus + ' cannabis &middot; ' + SD.accessorySkus + ' accessories</div></div>';
+    h += '<div class="card r"><div style="display:flex;justify-content:space-between;align-items:flex-start"><div><div class="clabel">Low Stock</div><div class="cval">' + SD.lowStock.length + '</div><div class="csub">need reorder</div></div>' + (SD.lowStock.length ? '<button class="see-more-btn" style="margin-top:2px;flex-shrink:0" onclick="openLowStockModal()">See More</button>' : '') + '</div></div>';
+    h += '</div>';
+    h += '<div class="box"><div class="boxtitle">Inventory by Category</div>';
+    SD.cats.forEach(function(c) {
+      h += '<div class="prog-row"><div class="prog-hd"><span><button class="cat-link" data-cat="' + esc(c.n) + '" onclick="openCategoryModal(this.dataset.cat)">' + esc(c.n) + '</button></span><span class="muted">' + c.count + ' SKUs</span></div><div class="prog-track"><div class="prog-fill" style="width:' + c.v + '%"></div></div></div>';
+    });
+    h += '</div>';
+    if (SD.fastestDepleting7d && SD.fastestDepleting7d.length) {
+      h += '<div class="box"><div class="boxtitle" style="display:flex;justify-content:space-between;align-items:center"><span>Fastest Depleting \u2014 7 Days</span><button class="see-more-btn" onclick="openTopProducts(\'fastestDepleting7d\',\'Fastest Depleting \u2014 7 Days\')">See More</button></div>';
+      SD.fastestDepleting7d.slice(0, 5).forEach(function(p, i) {
+        h += '<div class="row"><span><span class="muted">' + (i + 1) + '.&nbsp;</span>' + esc(p.name) + '</span><span class="amber">' + p.units + ' units</span></div>';
+      });
+      h += '</div>';
+    }
+    if (SD.fastestDepleting30d && SD.fastestDepleting30d.length) {
+      h += '<div class="box"><div class="boxtitle" style="display:flex;justify-content:space-between;align-items:center"><span>Fastest Depleting \u2014 30 Days</span><button class="see-more-btn" onclick="openTopProducts(\'fastestDepleting30d\',\'Fastest Depleting \u2014 30 Days\')">See More</button></div>';
+      SD.fastestDepleting30d.slice(0, 5).forEach(function(p, i) {
+        h += '<div class="row"><span><span class="muted">' + (i + 1) + '.&nbsp;</span>' + esc(p.name) + '</span><span class="amber">' + p.units + ' units</span></div>';
+      });
+      h += '</div>';
+    }
+  }
+  if (currentTab === 'customers') {
+    h += '<div class="grid2">';
+    h += '<div class="card g"><div class="clabel">Total Customers</div><div class="cval">' + SD.totalCustomers.toLocaleString() + '</div></div>';
+    h += '<div class="card"><div class="clabel">New Today</div><div class="cval">' + SD.newCustomersToday + '</div></div>';
+    h += '<div class="card"><div class="clabel">New This Week</div><div class="cval">' + SD.newCustomersWeek + '</div></div>';
+    h += '<div class="card"><div class="clabel">New This Month</div><div class="cval">' + SD.newCustomers + '</div></div>';
+    h += '<div class="card g"><div class="clabel">Loyalty Members</div><div class="cval">' + SD.loyalCustomers.toLocaleString() + '</div></div>';
+    h += '<div class="card r"><div class="clabel">Churn Risk</div><div class="cval">' + SD.churnRisk + '</div><div class="csub">inactive 60+ days</div></div>';
+    h += '</div>';
+    h += '<div class="grid2">';
+    h += '<div class="card"><div class="clabel">New / Day (Last 7d)</div><div class="cval">' + (SD.newCustomersPerDay7||0).toFixed(1) + '</div><div class="csub">avg per day</div></div>';
+    h += '<div class="card"><div class="clabel">New / Day (Last 30d)</div><div class="cval">' + (SD.newCustomersPerDay30||0).toFixed(1) + '</div><div class="csub">avg per day</div></div>';
+    h += '</div>';
+    if (SD.loyaltyGrowth && SD.loyaltyGrowth.length > 1) {
+      var lgv = SD.loyaltyGrowth, n = lgv.length;
+      var lgMin = lgv[0].count, lgMax = lgv[n-1].count, lgRange = lgMax - lgMin || 1;
+      var lgPts = lgv.map(function(d, i) {
+        return (i/(n-1)*100).toFixed(2) + ',' + (50 - ((d.count - lgMin)/lgRange*46)).toFixed(2);
+      }).join(' ');
+      var lgArea = '0,56 ' + lgPts + ' 100,56';
+      var gained = lgMax - lgMin;
+      h += '<div class="box">';
+      h += '<div class="boxtitle" style="display:flex;justify-content:space-between;align-items:center"><span>Loyalty Member Growth \u2014 30 Days</span><span class="' + (gained >= 0 ? 'green' : 'red') + '" style="font-size:11px">' + (gained >= 0 ? '+' : '') + gained + ' new</span></div>';
+      h += '<svg style="width:100%;height:60px;display:block;overflow:visible" viewBox="0 0 100 56" preserveAspectRatio="none">';
+      h += '<polygon points="' + lgArea + '" fill="#c8922a" opacity="0.1"/>';
+      h += '<polyline points="' + lgPts + '" fill="none" stroke="#c8922a" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>';
+      lgv.forEach(function(d, i) {
+        var x = (i/(n-1)*100).toFixed(2), y = (50-((d.count-lgMin)/lgRange*46)).toFixed(2);
+        h += '<circle cx="' + x + '" cy="' + y + '" r="1.5" fill="#c8922a" vector-effect="non-scaling-stroke" data-tip="' + d.date.slice(5) + ': ' + d.count.toLocaleString() + ' members" onmouseenter="showBarTip(event,this.getAttribute(\'data-tip\'))" onmouseleave="hideBarTip()" style="pointer-events:all;cursor:default"/>';
+      });
+      h += '</svg>';
+      h += '<div class="bar-labels"><span style="font-size:10px" class="muted">' + lgv[0].date.slice(5) + '</span><span style="font-size:10px" class="muted">' + lgv[n-1].date.slice(5) + '</span></div>';
+      h += '<div style="display:flex;justify-content:space-between;font-size:10px;margin-top:4px"><span class="muted">' + lgMin.toLocaleString() + ' members</span><span class="muted">' + lgMax.toLocaleString() + ' members</span></div>';
+      h += '</div>';
+    }
+  }
+  document.getElementById('panel').innerHTML = h;
+}
+
+var _msgSeq = 0;
+function addMsg(role, text, loading) {
+  chatHistory.push({ role: role, text: text });
+  var el = document.getElementById('messages'), id = 'm' + Date.now() + '_' + (++_msgSeq);
+  el.insertAdjacentHTML('beforeend',
+    '<div class="msg' + (role === 'user' ? ' user' : '') + '">' +
+    (role !== 'user' ? '<div class="ai-icon">AI</div>' : '') +
+    '<div class="bubble' + (role === 'user' ? ' user' : '') + '" id="' + id + '">' +
+    (text ? esc(text) : '') + (loading ? '<span class="cursor"> &#9610;</span>' : '') +
+    '</div></div>');
+  el.scrollTop = el.scrollHeight;
+  return id;
+}
+
+function updateMsg(id, text) { var el = document.getElementById(id); if (el) el.innerHTML = esc(text); }
+
+function renderMiniChart(chart) {
+  if (!chart || !chart.data || !chart.data.length) return '';
+  var data = chart.data;
+  var maxUnits = Math.max.apply(null, data.map(function(d) { return d.units; }));
+  var totalUnits = data.reduce(function(s, d) { return s + d.units; }, 0);
+  var h = '<div class="chat-chart">';
+  h += '<div class="chat-chart-title">' + esc(chart.title) + ' &middot; ' + totalUnits.toLocaleString() + ' total</div>';
+  if (maxUnits === 0) {
+    h += '<div style="color:#555;font-size:11px;text-align:center;padding:8px 0">No sales in this period</div>';
+  } else {
+    h += '<div class="chat-chart-bars">';
+    data.forEach(function(d) {
+      var pct = d.units / maxUnits;
+      h += '<div class="chat-bar-col" title="' + d.date + ': ' + d.units + ' units ($' + d.rev + ')">';
+      if (d.units > 0) h += '<div class="chat-bar" style="height:' + Math.max(3, Math.round(pct * 64)) + 'px"></div>';
+      h += '</div>';
+    });
+    h += '</div>';
+    var first = data[0].date.slice(5);
+    var mid   = data[Math.floor(data.length / 2)].date.slice(5);
+    var last  = data[data.length - 1].date.slice(5);
+    h += '<div class="chat-chart-xlabels"><span>' + first + '</span><span>' + mid + '</span><span>' + last + '</span></div>';
+  }
+  h += '</div>';
+  return h;
+}
+
+async function sendChat(text) {
+  var t = text || document.getElementById('chatInput').value.trim();
+  if (!t || busy) return;
+  document.getElementById('chatInput').value = '';
+  if (isMobile()) setMobileView('chat');
+  addMsg('user', t, false);
+  var loadId = addMsg('assistant', '', true);
+  busy = true; document.getElementById('sendBtn').disabled = true;
+  try {
+    var msgs = chatHistory.slice(0, -2).filter(function(m) { return m.text; }).map(function(m) { return { role: m.role === 'user' ? 'user' : 'assistant', content: m.text }; });
+    msgs.push({ role: 'user', content: t });
+    var headers = { 'Content-Type': 'application/json' };
+    if (aiKey) headers['x-api-key'] = aiKey;
+    var ctx = SD ? { todayRev: SD.todayRev, todayCount: SD.todayCount, weekRev: SD.weekRev, weekCount: SD.weekCount, monthRev: SD.monthRev, monthCount: SD.monthCount, totalCustomers: SD.totalCustomers, newCustomersToday: SD.newCustomersToday, newCustomersWeek: SD.newCustomersWeek, newCustomers: SD.newCustomers, loyalCustomers: SD.loyalCustomers, churnRisk: SD.churnRisk, lowStockCount: SD.lowStock ? SD.lowStock.length : 0, totalSkus: SD.totalSkus } : {};
+    var res = await fetch('/api/chat', { method: 'POST', headers: headers, body: JSON.stringify({ messages: msgs, context: ctx }) });
+    var j = await res.json();
+    var reply = (j.content && j.content[0] && j.content[0].text) || 'Please set your Anthropic API key using the SET AI KEY button in the top right.';
+    updateMsg(loadId, reply); chatHistory[chatHistory.length - 1].text = reply;
+    if (j.chart) {
+      var bubble = document.getElementById(loadId);
+      if (bubble) {
+        var chartRow = document.createElement('div');
+        chartRow.className = 'msg-chart';
+        chartRow.innerHTML = renderMiniChart(j.chart);
+        bubble.closest('.msg').insertAdjacentElement('afterend', chartRow);
+        var el = document.getElementById('messages');
+        el.scrollTop = el.scrollHeight;
+      }
+    }
+  } catch(e) { updateMsg(loadId, 'Error: ' + e.message); }
+  finally { busy = false; document.getElementById('sendBtn').disabled = false; }
+}
+
+function handleKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } }
+
+var qb = document.getElementById('quickBar');
+QUICK.forEach(function(q) { var b = document.createElement('button'); b.className = 'qbtn'; b.textContent = q; b.onclick = function() { sendChat(q); }; qb.appendChild(b); });
+
+function openTopProducts(key, title) {
+  key = key || 'topProducts';
+  title = title || 'Top 10 Products \u2014 This Month';
+  var list = SD && SD[key];
+  if (!list || !list.length) return;
+  var h = '';
+  list.forEach(function(p, i) {
+    h += '<div class="modal-row">';
+    h += '<span class="modal-rank">' + (i + 1) + '.</span>';
+    h += '<span class="modal-name">' + esc(p.name) + '</span>';
+    if (p.units !== undefined) h += '<span class="modal-units">' + p.units.toLocaleString() + ' units</span>';
+    h += '<span class="modal-rev">$' + p.rev.toLocaleString() + '</span>';
+    h += '</div>';
+  });
+  document.getElementById('modalTitle').textContent = title;
+  document.getElementById('modalBody').innerHTML = h;
+  document.getElementById('topModal').classList.add('open');
+}
+
+function openRangeProducts() {
+  openTopProducts('rangeTopProducts', 'Top Products \u2014 ' + (SD && SD.rangeLabel ? SD.rangeLabel : 'Custom Range'));
+}
+
+function openLowStockModal() {
+  if (!SD || !SD.lowStock || !SD.lowStock.length) return;
+  var h = '<div class="modal-inv-hd" style="grid-template-columns:1fr 70px"><span>Product</span><span style="text-align:right">Qty</span></div>';
+  SD.lowStock.forEach(function(x) {
+    var qCls = x.qty === 0 ? 'red' : x.qty <= 5 ? 'red' : 'amber';
+    h += '<div class="modal-inv-row" style="grid-template-columns:1fr 70px">';
+    h += '<div class="inv-name">' + esc(x.name) + '</div>';
+    h += '<div class="inv-qty ' + qCls + '">' + x.qty + '</div>';
+    h += '</div>';
+  });
+  document.getElementById('modalTitle').textContent = 'Critical Low Stock \u2014 ' + SD.lowStock.length + ' SKUs';
+  document.getElementById('modalBody').innerHTML = h;
+  document.getElementById('topModal').classList.add('open');
+}
+
+function openCategoryModal(catName) {
+  if (!SD || !SD.allProducts) return;
+  var all = SD.allProducts.filter(function(p) { return p.category === catName; });
+  var inStock  = all.filter(function(p) { return p.quantity > 0; }).sort(function(a,b) { return a.quantity - b.quantity; });
+  var outStock = all.filter(function(p) { return p.quantity === 0; }).sort(function(a,b) { return a.name.localeCompare(b.name); });
+
+  function renderRow(p) {
+    var qCls = p.quantity <= 10 ? 'red' : p.quantity <= 20 ? 'amber' : 'green';
+    var price = p.price ? '$' + p.price.toFixed(2) : '\u2014';
+    var r = '<div class="modal-inv-row">';
+    r += '<div><div class="inv-name">' + esc(p.name) + '</div>' + (p.brand ? '<div class="inv-brand">' + esc(p.brand) + '</div>' : '') + '</div>';
+    r += '<div class="inv-sku">' + esc(p.sku || '\u2014') + '</div>';
+    r += '<div class="inv-qty ' + qCls + '">' + p.quantity + '</div>';
+    r += '<div class="inv-price">' + price + '</div>';
+    r += '</div>';
+    return r;
+  }
+
+  var h = '<div style="font-size:11px;color:#555;margin-bottom:10px;font-style:italic">Flowhub API reports total quantity only \u2014 room-level breakdown (floor/vault) is not available via API</div>';
+  h += '<div class="modal-inv-hd"><span>Product</span><span>SKU</span><span style="text-align:right">Qty</span><span style="text-align:right">Price</span></div>';
+  inStock.forEach(function(p) { h += renderRow(p); });
+  if (outStock.length) {
+    h += '<div style="margin:14px 0 8px;padding:6px 0;border-top:1px solid #2e2e2e;border-bottom:1px solid #2e2e2e;font-size:10px;color:#555;text-transform:uppercase;letter-spacing:.12em">Out of Stock \u2014 ' + outStock.length + ' SKU' + (outStock.length !== 1 ? 's' : '') + '</div>';
+    outStock.forEach(function(p) { h += renderRow(p); });
+  }
+  document.getElementById('modalTitle').textContent = catName + ' \u2014 ' + inStock.length + ' in stock / ' + all.length + ' total SKUs';
+  document.getElementById('modalBody').innerHTML = h;
+  document.getElementById('topModal').classList.add('open');
+}
+
+async function init() {
+  // ── Stage 0: show cached data instantly if available ──────────────────────
+  var cached = loadCache();
+  if (cached) {
+    SD = cached;
+    defaultSD = Object.assign({}, SD);
+    document.getElementById('dot').className = 'dot live';
+    document.getElementById('badge').textContent = 'CACHED';
+    document.getElementById('badge').className = 'badge live';
+    document.getElementById('sync').textContent = 'cached \u2014 refreshing\u2026';
+    if (SD.lowStock && SD.lowStock.length) { var clb = document.getElementById('lowbadge'); clb.textContent = SD.lowStock.length + ' LOW STOCK'; clb.style.display = 'inline'; }
+    renderPanel();
+  }
+
+  try {
+    var today = localDateStr(new Date());
+    var now   = new Date();
+    // ── Calendar week/month boundaries (all in EST) ───────────────────────────
+    var nowESTDate   = now.toLocaleString('sv', { timeZone: 'America/New_York' }).split(' ')[0]; // "YYYY-MM-DD"
+    var calDow       = new Date(nowESTDate + 'T12:00:00Z').getDay(); // 0=Sun…6=Sat (noon UTC avoids DST edge)
+    var daysSinceMon = calDow === 0 ? 6 : calDow - 1;
+    var weekStartStr  = localDateStr(new Date(now - daysSinceMon * 86400000)); // Monday of current week
+    var monthStartStr = nowESTDate.slice(0, 8) + '01';                         // 1st of current month
+    var thirtyDaysAgo = localDateStr(new Date(now.getTime() - 30 * 86400000)); // 30 calendar days back
+    // Fetch window must cover week-start, month-start, AND 30 days back for depleting cards
+    var mo = [weekStartStr, monthStartStr, thirtyDaysAgo].sort()[0];
+
+    // ── Stage 1: fire all 3 fetches in parallel (no blocking health check) ──
+    var ordersP    = fetch('/api/orders?start_date=' + mo + '&end_date=' + today).then(function(r) { return r.json(); });
+    var inventoryP = fetch('/api/inventory').then(function(r) { return r.json(); });
+    var customersP = fetch('/api/customers').then(function(r) { return r.json(); });
+
+    // ── Stage 2: render inventory + customers as soon as they arrive ─────────
+    var rawP = await inventoryP;
+    var rawC = await customersP;
+    var products  = rawP.data || (Array.isArray(rawP) ? rawP : []);
+    var customers = rawC.data || (Array.isArray(rawC) ? rawC : []);
+
+    var low = products.filter(function(p) { return parseInt(p.quantity || 0) <= 10; })
+                      .map(function(p) { return { name: p.productName || p.variantName || 'Unknown', qty: parseInt(p.quantity || 0) }; })
+                      .sort(function(a, b) { return a.qty - b.qty; });
+    var cm = {};
+    products.forEach(function(p) { var c = p.category || 'Other'; cm[c] = (cm[c] || 0) + 1; });
+    var ptot = products.length || 1;
+    var cats = Object.keys(cm).map(function(k) { return { n: k, v: Math.round(cm[k] / ptot * 100), count: cm[k] }; }).sort(function(a, b) { return b.v - a.v; }).slice(0, 6);
+    var allProducts = products.map(function(p) { return { name: p.productName || p.variantName || 'Unknown', brand: p.brand || '', category: p.category || 'Other', sku: p.sku || '', quantity: parseInt(p.quantity || 0), price: p.postTaxPriceInPennies ? (p.postTaxPriceInPennies / 100) : 0 }; });
+    var inStockAll    = allProducts.filter(function(p) { return p.quantity > 0; });
+    var cannabisSkus  = inStockAll.filter(function(p) { return p.category !== 'Accessories'; }).length;
+    var accessorySkus = inStockAll.filter(function(p) { return p.category === 'Accessories'; }).length;
+
+    var weekStartBound  = new Date(estToISO(weekStartStr,  '00:00:00')); // Monday 00:00 EST
+    var monthStartBound = new Date(estToISO(monthStartStr, '00:00:00')); // 1st of month 00:00 EST
+    var t60 = new Date(now - 60 * 86400000);
+
+    // Pre-compute new-customer rates and loyalty growth series
+    var nc7  = customers.filter(function(c) { return new Date(c.createdAt || 0) >= new Date(now.getTime() -  7 * 86400000); }).length;
+    var nc30 = customers.filter(function(c) { return new Date(c.createdAt || 0) >= new Date(now.getTime() - 30 * 86400000); }).length;
+    var loyalAll = customers.filter(function(c) { return c.isLoyal || c.loyaltyPoints > 0; });
+    var loyalDates = loyalAll.map(function(c) {
+      return c.createdAt ? new Date(c.createdAt).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) : '2000-01-01';
+    }).sort();
+    function lgBisect(arr, val) { var lo=0,hi=arr.length; while(lo<hi){var m=lo+hi>>1; if(arr[m]<=val)lo=m+1; else hi=m;} return lo; }
+    var lgData = [];
+    for (var di = 29; di >= 0; di--) {
+      var lgDay  = new Date(now.getTime() - di * 86400000);
+      var lgDate = lgDay.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+      lgData.push({ date: lgDate, count: lgBisect(loyalDates, lgDate) });
+    }
+
+    // Build partial SD — sales shows "Loading orders…" spinner
+    SD = Object.assign(SD || {}, {
+      salesReady: false,
+      todayRev: 0, todayCount: 0,
+      weekRev: 0, weekCount: 0,
+      monthRev: 0, monthCount: 0,
+      hourly: [0,0,0,0,0,0,0,0,0,0,0,0],
+      hourlyCount: [0,0,0,0,0,0,0,0,0,0,0,0],
+      topProducts: [],
+      totalSkus: inStockAll.length,
+      cannabisSkus: cannabisSkus,
+      accessorySkus: accessorySkus,
+      lowStock: low,
+      cats: cats,
+      allProducts: allProducts,
+      totalCustomers: customers.length,
+      newCustomersToday: customers.filter(function(c) { return c.createdAt && new Date(c.createdAt).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) === nowESTDate; }).length,
+      newCustomersWeek:  customers.filter(function(c) { return new Date(c.createdAt || 0) >= weekStartBound; }).length,
+      newCustomers: customers.filter(function(c) { return new Date(c.createdAt || 0) >= monthStartBound; }).length,
+      loyalCustomers: customers.filter(function(c) { return c.isLoyal || c.loyaltyPoints > 0; }).length,
+      churnRisk: customers.filter(function(c) { var l = new Date(c.updatedAt || 0); return l < t60 && l.getFullYear() > 2000; }).length,
+      newCustomersPerDay7:  +(nc7  / 7).toFixed(1),
+      newCustomersPerDay30: +(nc30 / 30).toFixed(1),
+      loyaltyGrowth: lgData
+    });
+
+    document.getElementById('dot').className = 'dot live';
+    document.getElementById('badge').textContent = 'LIVE';
+    document.getElementById('badge').className = 'badge live';
+    document.getElementById('sync').textContent = 'inventory ready \u2014 loading orders\u2026';
+    if (low.length) { var lb = document.getElementById('lowbadge'); lb.textContent = low.length + ' LOW STOCK'; lb.style.display = 'inline'; }
+
+    // Show inventory/customers immediately; sales tab shows "Loading orders…"
+    renderPanel();
+
+    // ── Stage 3: wait for orders, complete the SD ────────────────────────────
+    var rawO = await ordersP;
+    var orders = rawO.orders || (Array.isArray(rawO) ? rawO : []);
+
+    // Post-discount, pre-tax: subTotal minus any discounts applied
+    function oTotal(o) { if (!o.totals) return 0; return (o.totals.subTotal || 0) - (o.totals.totalDiscounts || 0); }
+    function sumOrders(arr) { return arr.reduce(function(s, o) { return s + oTotal(o); }, 0); }
+
+    orders = orders.filter(function(o) { return o.orderStatus === 'sold'; });
+    var todayLocal = now.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    var tO = orders.filter(function(o) {
+      if (!o.completedOn) return false;
+      return new Date(o.completedOn).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) === todayLocal;
+    });
+    // weekStartBound and monthStartBound already declared in Stage 2
+    var wO = orders.filter(function(o) { return o.completedOn && new Date(o.completedOn) >= weekStartBound; });
+    var mO = orders.filter(function(o) { return o.completedOn && new Date(o.completedOn) >= monthStartBound; });
+    var t7bound  = new Date(now.getTime() -  7 * 86400000);
+    var t30bound = new Date(now.getTime() - 30 * 86400000);
+    var d7O  = orders.filter(function(o) { return o.completedOn && new Date(o.completedOn) >= t7bound;  });
+    var d30O = orders.filter(function(o) { return o.completedOn && new Date(o.completedOn) >= t30bound; });
+
+    var hm = [0,0,0,0,0,0,0,0,0,0,0,0];
+    var hc = [0,0,0,0,0,0,0,0,0,0,0,0];
+    tO.forEach(function(o) { var hr = nyHour(o.completedOn); if (hr >= 9 && hr <= 20) { hm[hr - 9] += oTotal(o); hc[hr - 9]++; } });
+
+    function buildTopProducts(orderSet) {
+      var pm = {};
+      orderSet.forEach(function(o) {
+        (o.itemsInCart || []).forEach(function(i) {
+          var n = i.productName || 'Unknown';
+          if (!pm[n]) pm[n] = { rev: 0, units: 0 };
+          pm[n].rev   += (i.totalPrice || 0);
+          pm[n].units += (i.quantity  || 1);
+        });
+      });
+      return Object.keys(pm).map(function(k) { return { name: k, rev: Math.round(pm[k].rev), units: pm[k].units }; }).sort(function(a, b) { return b.rev - a.rev; }).slice(0, 10);
+    }
+    var top      = buildTopProducts(mO);
+    var topToday = buildTopProducts(tO);
+    var topWeek  = buildTopProducts(wO);
+
+    function buildFastestDepleting(orderSet) {
+      var pm = {};
+      orderSet.forEach(function(o) {
+        (o.itemsInCart || []).forEach(function(i) {
+          var n = i.productName || 'Unknown';
+          if (!pm[n]) pm[n] = { rev: 0, units: 0 };
+          pm[n].rev   += (i.totalPrice || 0);
+          pm[n].units += (i.quantity  || 1);
+        });
+      });
+      return Object.keys(pm).map(function(k) { return { name: k, rev: Math.round(pm[k].rev), units: pm[k].units }; }).sort(function(a, b) { return b.units - a.units; }).slice(0, 10);
+    }
+    var dep7d  = buildFastestDepleting(d7O);
+    var dep30d = buildFastestDepleting(d30O);
+
+    Object.assign(SD, {
+      salesReady: true,
+      todayRev: +sumOrders(tO).toFixed(2),
+      todayCount: tO.length,
+      weekRev: +sumOrders(wO).toFixed(2),
+      weekCount: wO.length,
+      monthRev: +sumOrders(mO).toFixed(2),
+      monthCount: mO.length,
+      hourly: hm,
+      hourlyCount: hc,
+      topProducts: top,
+      topProductsToday: topToday,
+      topProductsWeek: topWeek,
+      fastestDepleting7d: dep7d,
+      fastestDepleting30d: dep30d
+    });
+    defaultSD = Object.assign({}, SD);
+    saveCache(SD);
+
+    document.getElementById('sync').textContent = 'synced ' + new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' EST';
+
+    // If user clicked a range preset while data was still loading, run it now
+    if (activePreset !== 'default') {
+      setPreset(activePreset);
+    } else {
+      renderPanel();
+    }
+
+    if (!cached) {
+      addMsg('assistant', 'Live Flowhub data loaded!\n\nToday: $' + SD.todayRev.toLocaleString() + ' across ' + SD.todayCount + ' transactions\nThis month: $' + SD.monthRev.toLocaleString() + ' / ' + SD.monthCount + ' transactions\nLow stock: ' + low.length + ' SKUs\nChurn risk: ' + SD.churnRisk + ' customers\n\nAsk me anything about your store!', false);
+    } else {
+      addMsg('assistant', 'Data refreshed!\n\nToday: $' + SD.todayRev.toLocaleString() + ' (' + SD.todayCount + ' transactions)\nThis month: $' + SD.monthRev.toLocaleString() + ' / ' + SD.monthCount + ' transactions', false);
+    }
+  } catch(e) {
+    if (!cached) {
+      document.getElementById('badge').textContent = 'ERROR';
+      addMsg('assistant', 'Error loading data: ' + e.message, false);
+    }
+    console.error(e);
+  }
+}
+(function() {
+  var saved = localStorage.getItem('flowhub_ai_key');
+  if (saved) { aiKey = saved; document.getElementById('keyBtn').textContent = 'AI KEY SET'; document.getElementById('keyInput').value = saved; }
+})();
+// ── Mobile view toggle ────────────────────────────────────────────────────────
+var _mobileView = 'data';
+function isMobile() { return window.innerWidth <= 767; }
+function setMobileView(v) {
+  _mobileView = v;
+  var left = document.querySelector('.left'), right = document.querySelector('.right');
+  if (isMobile()) {
+    left.classList.toggle('mob-hidden', v !== 'data');
+    right.classList.toggle('mob-hidden', v !== 'chat');
+  } else {
+    left.classList.remove('mob-hidden');
+    right.classList.remove('mob-hidden');
+  }
+  ['data','chat'].forEach(function(x) {
+    var b = document.getElementById('mnav-' + x);
+    if (b) b.className = 'mnav-btn' + (x === v ? ' on' : '');
+  });
+  if (v === 'chat') setTimeout(function() { var el = document.getElementById('messages'); if (el) el.scrollTop = el.scrollHeight; }, 50);
+}
+window.addEventListener('resize', function() { setMobileView(_mobileView); });
+setMobileView('data');
+
+init();
+</script>
+</body>
+</html>
