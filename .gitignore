@@ -1,4 +1,5 @@
 .env
+users.json
 node_modules/
 *.pkg
 *.zip
