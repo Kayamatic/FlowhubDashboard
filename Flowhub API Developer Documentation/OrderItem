@@ -1,0 +1,12 @@
+type: object
+required:
+  - productId
+  - quantityPurchased
+properties:
+  productId:
+    type: number
+  quantityPurchased:
+    type: number
+    minimum: 1
+  discountNote:
+    type: string

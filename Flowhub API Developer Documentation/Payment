@@ -1,0 +1,23 @@
+type: object
+properties:
+  _id:
+    type: string
+  paymentType:
+    type: string
+    enum:
+      - cash
+      - gift card
+      - loyalty points
+      - debit
+  amount:
+    type: number
+    multipleOf: 0.01
+  cardId:
+    type: string
+  loyaltyPoints:
+    type: number
+  debitProvider:
+    type: string
+  balanceAfterPayment:
+    type: number
+    multipleOf: 0.01

@@ -1,0 +1,68 @@
+type: object
+title: Customer
+properties:
+  id:
+    type: string
+    format: string
+  createdAt:
+    type: string
+    format: date-time
+  updatedAt:
+    type: string
+    format: date-time
+  type:
+    type: string
+    enum:
+      - medCustomer
+      - recCustomer
+  name:
+    type: string
+    format: string
+  state:
+    type: string
+    format: state
+  birthDate:
+    type: string
+    format: date-time
+  isLoyal:
+    type: boolean
+    default: true
+  loyaltyPoints:
+    type: integer
+  loyaltyPointsInPennies:
+    type: integer
+    x-stoplight:
+      id: zd1lytzq6ju8n
+    description: 'Only included in the response if `store_id` is included in the request parameters AND there''s a valid loyalty program at that location. '
+  phone:
+    type: string
+    format: phone-number
+  email:
+    type: string
+    format: email
+  streetAddress1:
+    type: string
+  streetAddress2:
+    type: string
+  city:
+    type: string
+  zip:
+    type: string
+  country:
+    type: string
+  consentsToPromotionalEmail:
+    type: boolean
+    x-stoplight:
+      id: 7w7m43s2lr28l
+    default: false
+  consentsToPromotionalSMS:
+    type: boolean
+    x-stoplight:
+      id: crwt9v88mdfxl
+    default: false
+  groups:
+    type: array
+    x-stoplight:
+      id: 9x26iydebetrj
+    items:
+      $ref: ../models/customer-group-model.yaml

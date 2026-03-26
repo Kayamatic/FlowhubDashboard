@@ -1,0 +1,31 @@
+type: object
+properties:
+  _id:
+    type: string
+  name:
+    type: string
+  percentage:
+    type: number
+  calculateBeforeDiscounts:
+    type: string
+  supplierSpecificTax:
+    type: boolean
+  excludeCustomerGroups:
+    type: array
+    items:
+      type: string
+  enableCostMarkup:
+    type: boolean
+  markupPercentage:
+    type: number
+  thisTaxInPennies:
+    type: number
+  appliesTo:
+    type: string
+    enum:
+      - all
+      - nonCannabis
+      - rec
+      - med
+      - both
+      - delivery

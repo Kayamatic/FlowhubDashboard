@@ -1,0 +1,193 @@
+title: InventoryAnalytics
+x-stoplight:
+  id: 0m6zxbp79a6np
+type: object
+x-examples:
+  Example 1:
+    brand: Capsule Co.
+    cannabinoidInformation:
+      - lowerRange: 5
+        name: thc
+        unitOfMeasure: mg
+        unitOfMeasureToGramsMultiplier: '1000'
+        upperRange: 5
+    category: Capsules
+    clientId: 0d702b0b-d88f-486d-a1fc-81b8497f72c6
+    costInMinorUnits: 63
+    currencyCode: USD
+    customCategoryName: null
+    expirationDate: '2024-01-04'
+    forSale: true
+    inventoryUnitOfMeasure: grams
+    inventoryUnitOfMeasureToGramsMultiplier: 1
+    isMixAndMatch: null
+    isSoldByWeight: false
+    isStackable: null
+    locationId: 5e746577-ee54-4796-9ee0-d28f45c48deb
+    locationName: Blazed and Infused
+    nutrients: null
+    parentProductId: f4748834-1588-402d-9455-c5fa611d46a3
+    parentProductName: Colorado Capsule
+    postTaxPriceInPennies: 100
+    preTaxPriceInPennies: 100
+    priceInMinorUnits: 100
+    productDescription: ''
+    productId: ac884040-86b8-41bc-93c8-def03e6932d4
+    productName: Colorado Capsule
+    productPictureURL: null
+    productUnitOfMeasure: grams
+    productUnitOfMeasureToGramsMultiplier: 1
+    productUpdatedAt: '2024-01-03T18:16:54.256924Z'
+    productWeight: 5
+    purchaseCategory: rec
+    quantity: 10
+    regulatoryId: abcdefg
+    sku: wFxRKCnzmu
+    speciesName: null
+    supplierLicense: SPLR420-420
+    supplierName: 'Cannabis Suppliers, Inc.'
+    terpenes: null
+    type: null
+    variantId: 4810aa50-a706-400d-9af0-6759dbb8f9cd
+    variantName: ''
+    weightTierInformation: null
+properties:
+  brand:
+    type: string
+  cannabinoidInformation:
+    type: array
+    items:
+      type: object
+      properties:
+        lowerRange:
+          type: integer
+        name:
+          type: string
+        unitOfMeasure:
+          type: string
+        unitOfMeasureToGramsMultiplier:
+          type: string
+        upperRange:
+          type: integer
+  category:
+    type: string
+  clientId:
+    type: string
+  costInMinorUnits:
+    type: integer
+  createdAt:
+    type: string
+  currencyCode:
+    type: string
+  customCategoryName:
+    type: string
+    x-nullable: true
+  expirationDate:
+    type: string
+  forSale:
+    type: boolean
+  inventoryUnitOfMeasure:
+    type: string
+  inventoryUnitOfMeasureToGramsMultiplier:
+    type: integer
+  invoiceNumber:
+    type: string
+  isMixAndMatch:
+    type: boolean
+    x-nullable: true
+  isSoldByWeight:
+    type: boolean
+  isStackable:
+    type: boolean
+    x-nullable: true
+  locationId:
+    type: string
+  locationName:
+    type: string
+  manifestId:
+    type: string
+  nutrients:
+    x-nullable: true
+  parentProductId:
+    type: string
+    x-nullable: true
+  parentProductName:
+    type: string
+  postTaxPriceInPennies:
+    type: integer
+  preTaxPriceInPennies:
+    type: integer
+  priceInMinorUnits:
+    type: integer
+  productDescription:
+    type: string
+  productId:
+    type: string
+  productName:
+    type: string
+  productPictureURL:
+    type: string
+    x-nullable: true
+  productUnitOfMeasure:
+    type: string
+  productUnitOfMeasureToGramsMultiplier:
+    type: integer
+  productUpdatedAt:
+    type: string
+  productWeight:
+    type: integer
+  purchaseCategory:
+    type: string
+  quantity:
+    type: integer
+  regulatoryId:
+    type: string
+  speciesName:
+    type: string
+    x-nullable: true
+  sku:
+    type: string
+  supplierLicense:
+    type: string
+  supplierName:
+    type: string
+  terpenes:
+    type: array
+    x-nullable: true
+    items:
+      x-stoplight:
+        id: ohr52x9s6nt1v
+      type: object
+  type:
+    type: string
+  variantId:
+    type: string
+  variantName:
+    type: string
+  weightTierInformation:
+    type: array
+    x-nullable: true
+    items:
+      x-stoplight:
+        id: ay6i0fsoqipm8
+      type: object
+  tags:
+    type: array
+    x-stoplight:
+      id: lb14cbz5ymnkg
+    items:
+      x-stoplight:
+        id: u87tqreho34zw
+      type: string
+      default: []
+      example: '["hot-seller", "dank"]'
+  effects:
+    type: array
+    x-stoplight:
+      id: h2vookzd5kwup
+    items:
+      x-stoplight:
+        id: g0nudehyl7ekt
+      type: string
+      default: []
+      example: '["euphoric", "energetic"]'

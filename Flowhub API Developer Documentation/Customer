@@ -1,0 +1,32 @@
+type: object
+properties:
+  firstName:
+    type: string
+    example: Jane
+  lastName:
+    type: string
+    example: Smith
+  birthDate:
+    type: string
+    format: date
+  externalId:
+    type: string
+  email:
+    type: string
+    example: jane@customer.example
+  phone:
+    description: An E.164 formatted phone number
+    type: string
+    example: '+13035553718'
+  medRecOrBoth:
+    type: string
+    enum:
+      - med
+      - rec
+      - both
+  medId:
+    type: string
+    description: required when customer is medical
+  medExp:
+    type: string
+    description: required medId is present

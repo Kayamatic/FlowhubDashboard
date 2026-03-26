@@ -1,0 +1,34 @@
+type: object
+title: ItemDiscounts
+properties:
+  _id:
+    type: string
+  name:
+    type: string
+  type:
+    type: string
+  discountAmount:
+    type: number
+    multipleOf: 0.01
+  discountType:
+    type: string
+  discountId:
+    type: string
+  dollarsOff:
+    type: number
+    multipleOf: 0.01
+  penniesOff:
+    type: number
+    multipleOf: 0.01
+  percentOff:
+    type: number
+  discounterName:
+    type: string
+  discounterId:
+    type: string
+  isCartDiscount:
+    type: boolean
+  couponCode:
+    type: string
+  quantity:
+    type: number

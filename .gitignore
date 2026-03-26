@@ -1,5 +1,8 @@
 .env
 users.json
+flowhub.db
+flowhub.db-shm
+flowhub.db-wal
 node_modules/
 *.pkg
 *.zip

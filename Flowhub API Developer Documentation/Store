@@ -1,0 +1,73 @@
+type: object
+x-examples:
+  Example 1:
+    address:
+      city: Alaska
+      country: ''
+      county: null
+      state: Alaska
+      streetAddress1: 123 Alaska Ave
+      streetAddress2: null
+      zip: '16545'
+    clientId: 0d702b0b-d88f-486d-a1fc-81b8497f72c6
+    clientName: Blazed and Infused
+    email: ''
+    hoursOfOperation: null
+    importId: b334921e-e105-4309-b290-64bc6aad14af
+    licenseType:
+      - rec
+    locationId: b334921e-e105-4309-b290-64bc6aad14af
+    locationLogoURL: null
+    locationName: Alaska
+    phoneNumber: ''
+    timeZone: US/Alaska
+    website: ''
+description: 'A FlowHub store, often referred to as "location" in the API documentation.'
+properties:
+  address:
+    type: object
+    properties:
+      city:
+        type: string
+      country:
+        type: string
+      county:
+        type: string
+        x-nullable: true
+      state:
+        type: string
+      streetAddress1:
+        type: string
+      streetAddress2:
+        type: string
+        x-nullable: true
+      zip:
+        type: string
+  clientId:
+    type: string
+  clientName:
+    type: string
+  email:
+    type: string
+  hoursOfOperation:
+    type: string
+    x-nullable: true
+  importId:
+    type: string
+  licenseType:
+    type: array
+    items:
+      type: string
+  locationId:
+    type: string
+  locationLogoURL:
+    type: string
+    x-nullable: true
+  locationName:
+    type: string
+  phoneNumber:
+    type: string
+  timeZone:
+    type: string
+  website:
+    type: string

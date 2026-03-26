@@ -1,0 +1,279 @@
+type: object
+title: Order
+description: Order Data Model
+properties:
+  id:
+    type: string
+    format: string
+  budtender:
+    type: string
+  budtenderId:
+    type: string
+    x-stoplight:
+      id: 5d6htu5f6m1d8
+  clientId:
+    type: string
+    format: string
+  createdAt:
+    type: string
+    format: date-time
+  completedOn:
+    type: string
+    format: date-time
+  currentPoints:
+    type: integer
+  customerId:
+    type: string
+    format: string
+  customerType:
+    type: string
+    enum:
+      - recCustomer
+      - medCustomer
+  fulfilledBy:
+    type: string
+    x-stoplight:
+      id: fdxpxlxbba9ma
+  fulfilledById:
+    type: string
+    x-stoplight:
+      id: tsjhybdu7sb9s
+  fullName:
+    type: string
+  integratorId:
+    type: string
+    x-stoplight:
+      id: pzfsmlqych3jq
+  itemsInCart:
+    type: array
+    items:
+      $ref: '#/definitions/item-in-cart-model'
+  locationId:
+    type: string
+  name:
+    type: string
+    format: string
+    x-stoplight:
+      id: a3rysq6c43zba
+  orderId:
+    type: string
+    format: string
+  orderStatus:
+    type: string
+    enum:
+      - Pending
+      - Cancelled
+      - Sold
+  orderType:
+    type: string
+    enum:
+      - in-store-fulfillment
+      - delivery
+      - pickup
+      - kiosk
+      - lounge
+      - walk-in
+  originalSaleId:
+    type: string
+    x-stoplight:
+      id: d1qbuqgu7mhzy
+    description: 'If this sale is a refund, this field will be the `id` of the original sale that this one refunds.'
+  payments:
+    type: array
+    items:
+      $ref: '#/definitions/Payment'
+  sentToFulfillmentBy:
+    type: string
+    x-stoplight:
+      id: 1psu271783kxx
+  sentToFulfillmentById:
+    type: string
+    x-stoplight:
+      id: zpm54sh5vg26w
+  totals:
+    $ref: '#/definitions/totals-model'
+  voided:
+    type: boolean
+definitions:
+  item-in-cart-model:
+    type: object
+    title: Item In Cart
+    properties:
+      id:
+        type: string
+      category:
+        type: string
+        enum:
+          - BulkBud
+          - PackedBud
+          - Edible
+          - NonEdible
+          - Concentrate
+          - Accessory
+      itemDiscounts:
+        type: array
+        items:
+          $ref: '#/definitions/ItemDiscounts'
+      parentProductId:
+        type: string
+        x-stoplight:
+          id: l8pfe34r44u9k
+      productId:
+        type: string
+        x-stoplight:
+          id: vt1w4hq7unl4t
+      productName:
+        type: string
+      quantity:
+        type: number
+        multipleOf: 0.001
+      strainName:
+        type: string
+      sku:
+        type: string
+      tax:
+        type: array
+        items:
+          $ref: '#/definitions/tax'
+      title1:
+        type: string
+      title2:
+        type: string
+      totalCost:
+        type: number
+      totalPrice:
+        type: number
+        multipleOf: 0.01
+      unitOfWeight:
+        type: string
+        enum:
+          - Each
+          - Gram
+      unitPrice:
+        type: number
+        multipleOf: 0.01
+      unitCost:
+        type: number
+      variantId:
+        type: string
+        x-stoplight:
+          id: g5xg9j1aa2nbz
+      brand:
+        type: string
+        x-stoplight:
+          id: fum6q5v0fn85z
+      type:
+        type: string
+        x-stoplight:
+          id: dj8qsmr1oulxk
+  ItemDiscounts:
+    type: object
+    title: ItemDiscounts
+    properties:
+      _id:
+        type: string
+      name:
+        type: string
+      type:
+        type: string
+      discountAmount:
+        type: number
+        multipleOf: 0.01
+      discountType:
+        type: string
+      discountId:
+        type: string
+      dollarsOff:
+        type: number
+        multipleOf: 0.01
+      penniesOff:
+        type: number
+        multipleOf: 0.01
+      percentOff:
+        type: number
+      discounterName:
+        type: string
+      discounterId:
+        type: string
+      isCartDiscount:
+        type: boolean
+      couponCode:
+        type: string
+      quantity:
+        type: number
+  tax:
+    type: object
+    properties:
+      _id:
+        type: string
+      name:
+        type: string
+      percentage:
+        type: number
+      calculateBeforeDiscounts:
+        type: string
+      supplierSpecificTax:
+        type: boolean
+      excludeCustomerGroups:
+        type: array
+        items:
+          type: string
+      enableCostMarkup:
+        type: boolean
+      markupPercentage:
+        type: number
+      thisTaxInPennies:
+        type: number
+      appliesTo:
+        type: string
+        enum:
+          - all
+          - nonCannabis
+          - rec
+          - med
+          - both
+          - delivery
+  Payment:
+    type: object
+    properties:
+      _id:
+        type: string
+      paymentType:
+        type: string
+        enum:
+          - cash
+          - gift card
+          - loyalty points
+          - debit
+      amount:
+        type: number
+        multipleOf: 0.01
+      cardId:
+        type: string
+      loyaltyPoints:
+        type: number
+      debitProvider:
+        type: string
+      balanceAfterPayment:
+        type: number
+        multipleOf: 0.01
+  totals-model:
+    type: object
+    properties:
+      FinalTotal:
+        type: number
+        multipleOf: 0.01
+      SubTotal:
+        type: number
+        multipleOf: 0.01
+      TotalDiscounts:
+        type: number
+        multipleOf: 0.01
+      TotalFees:
+        type: number
+        multipleOf: 0.01
+      TotalTaxes:
+        type: number
+        multipleOf: 0.01
+    title: Totals
+    description: Totals Data Model

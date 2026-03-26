@@ -1,0 +1,138 @@
+type: object
+title: Item In Cart
+properties:
+  id:
+    type: string
+  category:
+    type: string
+    enum:
+      - BulkBud
+      - PackedBud
+      - Edible
+      - NonEdible
+      - Concentrate
+      - Accessory
+  itemDiscounts:
+    type: array
+    items:
+      $ref: '#/definitions/ItemDiscounts'
+  parentProductId:
+    type: string
+    x-stoplight:
+      id: l8pfe34r44u9k
+  productId:
+    type: string
+    x-stoplight:
+      id: vt1w4hq7unl4t
+  productName:
+    type: string
+  quantity:
+    type: number
+    multipleOf: 0.001
+  strainName:
+    type: string
+  sku:
+    type: string
+  tax:
+    type: array
+    items:
+      $ref: '#/definitions/tax'
+  title1:
+    type: string
+  title2:
+    type: string
+  totalCost:
+    type: number
+  totalPrice:
+    type: number
+    multipleOf: 0.01
+  unitOfWeight:
+    type: string
+    enum:
+      - Each
+      - Gram
+  unitPrice:
+    type: number
+    multipleOf: 0.01
+  unitCost:
+    type: number
+  variantId:
+    type: string
+    x-stoplight:
+      id: g5xg9j1aa2nbz
+  brand:
+    type: string
+    x-stoplight:
+      id: fum6q5v0fn85z
+  type:
+    type: string
+    x-stoplight:
+      id: dj8qsmr1oulxk
+definitions:
+  ItemDiscounts:
+    type: object
+    title: ItemDiscounts
+    properties:
+      _id:
+        type: string
+      name:
+        type: string
+      type:
+        type: string
+      discountAmount:
+        type: number
+        multipleOf: 0.01
+      discountType:
+        type: string
+      discountId:
+        type: string
+      dollarsOff:
+        type: number
+        multipleOf: 0.01
+      penniesOff:
+        type: number
+        multipleOf: 0.01
+      percentOff:
+        type: number
+      discounterName:
+        type: string
+      discounterId:
+        type: string
+      isCartDiscount:
+        type: boolean
+      couponCode:
+        type: string
+      quantity:
+        type: number
+  tax:
+    type: object
+    properties:
+      _id:
+        type: string
+      name:
+        type: string
+      percentage:
+        type: number
+      calculateBeforeDiscounts:
+        type: string
+      supplierSpecificTax:
+        type: boolean
+      excludeCustomerGroups:
+        type: array
+        items:
+          type: string
+      enableCostMarkup:
+        type: boolean
+      markupPercentage:
+        type: number
+      thisTaxInPennies:
+        type: number
+      appliesTo:
+        type: string
+        enum:
+          - all
+          - nonCannabis
+          - rec
+          - med
+          - both
+          - delivery

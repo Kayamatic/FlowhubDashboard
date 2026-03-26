@@ -1,0 +1,129 @@
+$ref: '#/definitions/Order'
+definitions:
+  Order:
+    type: object
+    required:
+      - externalCreatedAt
+      - customer
+      - orderItems
+    properties:
+      address:
+        $ref: '#/definitions/address'
+      externalCreatedAt:
+        type: string
+        format: date-time
+      customer:
+        $ref: '#/definitions/Customer'
+      customerId:
+        type: string
+        x-stoplight:
+          id: gjcq8e5g6hp8a
+        description: '*Required if redeeming loyalty points.*  '
+      cartDiscountNote:
+        type: string
+        description: A note describing discounts applied to the cart.
+      customerNote:
+        type: string
+        description: A note provided by the customer.
+      orderItems:
+        type: array
+        minItems: 1
+        items:
+          $ref: '#/definitions/OrderItem'
+      orderType:
+        type: string
+        enum:
+          - delivery
+          - pickup
+          - kiosk
+      requestedFulfillmentTimeStart:
+        type: string
+        format: date-time
+      requestedFulfillmentTimeEnd:
+        type: string
+        format: date-time
+      postbackUrl:
+        type: string
+        description: A URL to post back to with updates about the order.
+      fees:
+        type: array
+        items:
+          $ref: '#/definitions/Fees'
+      loyaltyPointsInPennies:
+        type: integer
+        x-stoplight:
+          id: l8kwqvxcc0aeo
+        description: '*Requires customerId to use.*  Value of loyalty points to redeem in pennies'
+  address:
+    type: object
+    properties:
+      street1:
+        type: string
+      street2:
+        type: string
+      city:
+        type: string
+      state:
+        type: string
+      zip:
+        type: string
+    required:
+      - street1
+      - city
+      - state
+      - zip
+  Customer:
+    type: object
+    properties:
+      firstName:
+        type: string
+        example: Jane
+      lastName:
+        type: string
+        example: Smith
+      birthDate:
+        type: string
+        format: date
+      externalId:
+        type: string
+      email:
+        type: string
+        example: jane@customer.example
+      phone:
+        description: An E.164 formatted phone number
+        type: string
+        example: '+13035553718'
+      medRecOrBoth:
+        type: string
+        enum:
+          - med
+          - rec
+          - both
+      medId:
+        type: string
+        description: required when customer is medical
+      medExp:
+        type: string
+        description: required medId is present
+  OrderItem:
+    type: object
+    required:
+      - productId
+      - quantityPurchased
+    properties:
+      productId:
+        type: number
+      quantityPurchased:
+        type: number
+        minimum: 1
+      discountNote:
+        type: string
+  Fees:
+    type: object
+    title: fees
+    properties:
+      name:
+        type: string
+      amount:
+        type: number
+        description: In pennies

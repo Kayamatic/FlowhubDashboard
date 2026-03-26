@@ -1,0 +1,8 @@
+type: object
+title: fees
+properties:
+  name:
+    type: string
+  amount:
+    type: number
+    description: In pennies

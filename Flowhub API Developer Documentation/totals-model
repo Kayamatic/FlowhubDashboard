@@ -1,0 +1,19 @@
+type: object
+properties:
+  FinalTotal:
+    type: number
+    multipleOf: 0.01
+  SubTotal:
+    type: number
+    multipleOf: 0.01
+  TotalDiscounts:
+    type: number
+    multipleOf: 0.01
+  TotalFees:
+    type: number
+    multipleOf: 0.01
+  TotalTaxes:
+    type: number
+    multipleOf: 0.01
+title: Totals
+description: Totals Data Model
