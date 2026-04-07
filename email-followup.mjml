@@ -1,0 +1,82 @@
+<mjml>
+  <mj-head>
+    <mj-title>Quick follow-up on your Diggory application</mj-title>
+    <mj-preview>Reply here and we'll get the conversation started — it only takes a few minutes.</mj-preview>
+    <mj-attributes>
+      <mj-all font-family="Helvetica Neue, Helvetica, Arial, sans-serif" />
+      <mj-text font-size="15px" line-height="1.7" color="#aaaaaa" />
+    </mj-attributes>
+  </mj-head>
+
+  <mj-body background-color="#0a0a0a">
+
+    <!-- Logo -->
+    <mj-section background-color="#141414" border-radius="12px 12px 0 0" border-left="1px solid #2a2a2a" border-right="1px solid #2a2a2a" border-top="1px solid #2a2a2a" padding="36px 48px 24px 48px">
+      <mj-column>
+        <mj-image src="https://askdiggory.com/diggory_logo_amber.png" alt="Diggory" width="160px" align="left" padding="0" />
+      </mj-column>
+    </mj-section>
+
+    <!-- Divider -->
+    <mj-section background-color="#141414" border-left="1px solid #2a2a2a" border-right="1px solid #2a2a2a" padding="0 48px">
+      <mj-column>
+        <mj-divider border-color="#c8922a" border-width="1px" padding="0" />
+      </mj-column>
+    </mj-section>
+
+    <!-- Body -->
+    <mj-section background-color="#141414" border-left="1px solid #2a2a2a" border-right="1px solid #2a2a2a" padding="36px 48px 8px 48px">
+      <mj-column>
+
+        <mj-text color="#f0e8d8" font-size="17px" padding-bottom="24px">
+          Hey {firstName},
+        </mj-text>
+
+        <mj-text color="#f0e8d8" padding-bottom="24px">
+          Just wanted to make sure my earlier note didn't get buried.
+        </mj-text>
+
+        <mj-text padding-bottom="36px">
+          I've reviewed your application for the Diggory beta and I'm looking forward to connecting. Reply here and we'll get the conversation started — it only takes a few minutes to get you set up.
+        </mj-text>
+
+        <!-- CTA Button -->
+        <mj-button background-color="#c8922a" color="#000000" font-size="15px" font-weight="700" border-radius="8px" padding-bottom="36px" href="mailto:info@askdiggory.com" align="left">
+          Reply to this email →
+        </mj-button>
+
+        <mj-text padding-bottom="32px">
+          Talk soon,
+        </mj-text>
+
+        <!-- Signature -->
+        <mj-text color="#f0e8d8" font-weight="700" font-size="15px" padding-bottom="4px">
+          Bill Hewson
+        </mj-text>
+        <mj-text padding-bottom="4px">
+          Founder, Diggory
+        </mj-text>
+        <mj-text padding-bottom="4px">
+          <a href="https://askdiggory.com" style="color:#c8922a;">askdiggory.com</a>
+        </mj-text>
+        <mj-text padding-bottom="4px">
+          <a href="mailto:info@askdiggory.com" style="color:#c8922a;">info@askdiggory.com</a>
+        </mj-text>
+        <mj-text padding-bottom="0">
+          (203) 610-4649
+        </mj-text>
+
+      </mj-column>
+    </mj-section>
+
+    <!-- Footer -->
+    <mj-section background-color="#141414" border-radius="0 0 12px 12px" border-left="1px solid #2a2a2a" border-right="1px solid #2a2a2a" border-bottom="1px solid #2a2a2a" border-top="1px solid #2a2a2a" padding="24px 48px">
+      <mj-column>
+        <mj-text font-size="12px" color="#555555" align="center">
+          © 2026 Kayamatic LLC · <a href="https://askdiggory.com/privacy.html" style="color:#555555; text-decoration:underline;">Privacy Policy</a> · You're receiving this because you applied for the Diggory beta. · {unsubscribe_link}
+        </mj-text>
+      </mj-column>
+    </mj-section>
+
+  </mj-body>
+</mjml>

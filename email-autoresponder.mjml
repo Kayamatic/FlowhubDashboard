@@ -1,0 +1,114 @@
+<mjml>
+  <mj-head>
+    <mj-title>Your Diggory beta application — received ✓</mj-title>
+    <mj-preview>I review every application personally and will follow up within 48 hours.</mj-preview>
+    <mj-attributes>
+      <mj-all font-family="Helvetica Neue, Helvetica, Arial, sans-serif" />
+      <mj-text font-size="15px" line-height="1.7" color="#aaaaaa" />
+    </mj-attributes>
+    <mj-style>
+      a { color: #c8922a !important; text-decoration: none !important; }
+    </mj-style>
+  </mj-head>
+
+  <mj-body background-color="#0a0a0a">
+
+    <!-- Logo -->
+    <mj-section background-color="#141414" border-radius="12px 12px 0 0" border-left="1px solid #2a2a2a" border-right="1px solid #2a2a2a" border-top="1px solid #2a2a2a" padding="36px 48px 24px 48px">
+      <mj-column>
+        <mj-image src="https://askdiggory.com/diggory_logo_amber.png" alt="Diggory" width="160px" align="left" padding="0" />
+      </mj-column>
+    </mj-section>
+
+    <!-- Divider -->
+    <mj-section background-color="#141414" border-left="1px solid #2a2a2a" border-right="1px solid #2a2a2a" padding="0 48px">
+      <mj-column>
+        <mj-divider border-color="#c8922a" border-width="1px" padding="0" />
+      </mj-column>
+    </mj-section>
+
+    <!-- Body -->
+    <mj-section background-color="#141414" border-left="1px solid #2a2a2a" border-right="1px solid #2a2a2a" padding="36px 48px 8px 48px">
+      <mj-column>
+
+        <mj-text color="#f0e8d8" font-size="17px" padding-bottom="24px">
+          Hey {firstName},
+        </mj-text>
+
+        <mj-text color="#f0e8d8" padding-bottom="16px">
+          Got it — your application for the Diggory beta is in.
+        </mj-text>
+
+        <mj-text padding-bottom="32px">
+          I review every application personally and will follow up within 48 hours. We'll confirm your POS connection and get you set up from there.
+        </mj-text>
+
+      </mj-column>
+    </mj-section>
+
+    <!-- Feature callout box -->
+    <mj-section background-color="#1a1a1a" border-left="1px solid #2a2a2a" border-right="1px solid #2a2a2a" border-top="1px solid #2a2a2a" border-bottom="1px solid #2a2a2a" padding="24px 48px">
+      <mj-column>
+        <mj-text color="#c8922a" font-size="12px" font-weight="700" letter-spacing="0.08em" padding-bottom="12px">
+          WHAT YOU'RE GETTING
+        </mj-text>
+        <mj-text color="#f0e8d8" padding-bottom="12px">
+          <strong>Diggory is an AI analyst that lives inside your data.</strong> Ask it anything — margins by category, lapsed customers, inventory velocity, SKUs selling below cost — and get answers directly from your live POS data.
+        </mj-text>
+        <mj-text>
+          No exports. No dashboards. No waiting on a report.
+        </mj-text>
+      </mj-column>
+    </mj-section>
+
+    <!-- Beta benefits -->
+    <mj-section background-color="#141414" border-left="1px solid #2a2a2a" border-right="1px solid #2a2a2a" padding="28px 48px 8px 48px">
+      <mj-column>
+        <mj-text color="#f0e8d8" padding-bottom="8px">
+          <span style="color:#c8922a;">✓</span>&nbsp; Direct line to the founder — your feedback shapes the product
+        </mj-text>
+        <mj-text color="#f0e8d8" padding-bottom="8px">
+          <span style="color:#c8922a;">✓</span>&nbsp; Free for the entire beta period
+        </mj-text>
+        <mj-text color="#f0e8d8" padding-bottom="32px">
+          <span style="color:#c8922a;">✓</span>&nbsp; Founder pricing locked in permanently when we launch
+        </mj-text>
+
+        <mj-text padding-bottom="8px">
+          If you have any questions before I follow up, just reply to this email.
+        </mj-text>
+        <mj-text padding-bottom="32px">
+          Talk soon,
+        </mj-text>
+
+        <!-- Signature -->
+        <mj-text color="#f0e8d8" font-weight="700" font-size="15px" padding-bottom="4px">
+          Bill Hewson
+        </mj-text>
+        <mj-text padding-bottom="4px">
+          Founder, Diggory
+        </mj-text>
+        <mj-text padding-bottom="4px">
+          <a href="https://askdiggory.com" style="color:#c8922a;">askdiggory.com</a>
+        </mj-text>
+        <mj-text padding-bottom="4px">
+          <a href="mailto:info@askdiggory.com" style="color:#c8922a;">info@askdiggory.com</a>
+        </mj-text>
+        <mj-text padding-bottom="0">
+          (203) 610-4649
+        </mj-text>
+
+      </mj-column>
+    </mj-section>
+
+    <!-- Footer -->
+    <mj-section background-color="#141414" border-radius="0 0 12px 12px" border-left="1px solid #2a2a2a" border-right="1px solid #2a2a2a" border-bottom="1px solid #2a2a2a" border-top="1px solid #2a2a2a" padding="24px 48px">
+      <mj-column>
+        <mj-text font-size="12px" color="#555555" align="center">
+          © 2026 Kayamatic LLC · <a href="https://askdiggory.com/privacy.html" style="color:#555555; text-decoration:underline;">Privacy Policy</a> · You're receiving this because you applied for the Diggory beta. · {unsubscribe_link}
+        </mj-text>
+      </mj-column>
+    </mj-section>
+
+  </mj-body>
+</mjml>

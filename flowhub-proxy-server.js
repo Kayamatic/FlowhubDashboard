@@ -2,6 +2,7 @@ require("dotenv").config({ override: true });
 const express = require("express");
 const cors = require("cors");
 const fs = require("fs");
+const crypto = require("crypto");
 const { AsyncLocalStorage } = require('async_hooks');
 const Database = require('better-sqlite3');
 const db     = new Database(__dirname + '/flowhub.db');
@@ -36,6 +37,13 @@ db.exec(`
     summary    TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS aiq_contacts (
+    contact_id   TEXT PRIMARY KEY,
+    src_id       TEXT,
+    data         TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_aiq_src ON aiq_contacts(src_id);
 `);
 
 // Demo DB helpers — separate caches for demo sessions
@@ -97,7 +105,7 @@ function demoWarmToday() {
 
     const tx = demoDB.transaction(() => {
       for (let i = 0; i < dailyOrders; i++) {
-        const oid = require('crypto').randomUUID();
+        const oid = crypto.randomUUID();
         let hour = weightedPick(HOURS, HOURLY_WEIGHTS);
         if (hour >= currentESTHour) hour = rand(9, Math.max(9, currentESTHour - 1));
         const ts = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), hour + offset, rand(0, 59), rand(0, 59), rand(0, 999)));
@@ -173,6 +181,111 @@ function demoFetchCustomers() {
   _demoCustCache = demoDB.prepare('SELECT data FROM demo_customers').all().map(r => JSON.parse(r.data));
   _demoCustCacheTime = Date.now();
   return _demoCustCache;
+}
+
+// ── Alpine IQ loyalty integration ────────────────────────────────────────────
+const AIQ_KEY = process.env.AIQ_API_KEY || '';
+const AIQ_UID = process.env.AIQ_UID || '';
+const AIQ_BASE = 'https://lab.alpineiq.com';
+const AIQ_TTL = 30 * 60 * 1000; // 30-min in-memory TTL
+let _aiqCache = null, _aiqCacheTime = 0;
+const _dbUpsertAiq = db.prepare('INSERT OR REPLACE INTO aiq_contacts (contact_id, src_id, data, updated_at) VALUES (?, ?, ?, ?)');
+const _dbAiqIngest = db.transaction(function(contacts) {
+  const ts = new Date().toISOString();
+  for (const c of contacts) {
+    _dbUpsertAiq.run(c.contactID, c.srcID || null, JSON.stringify(c), ts);
+  }
+});
+
+async function fetchAiqContacts() {
+  if (!AIQ_KEY || !AIQ_UID) return [];
+  if (_aiqCache && Date.now() - _aiqCacheTime < AIQ_TTL) return _aiqCache;
+
+  // Try SQLite first — if we have data less than 2 hours old, use it while we refresh in background
+  const freshness = db.prepare("SELECT updated_at FROM aiq_contacts LIMIT 1").get();
+  const dbAge = freshness ? (Date.now() - new Date(freshness.updated_at).getTime()) : Infinity;
+  let fromDb = null;
+  if (dbAge < 2 * 60 * 60 * 1000) {
+    fromDb = db.prepare('SELECT data FROM aiq_contacts').all().map(r => JSON.parse(r.data));
+    _aiqCache = fromDb; _aiqCacheTime = Date.now();
+    console.log('[aiq] Loaded', fromDb.length, 'contacts from SQLite cache');
+  }
+
+  // Fetch fresh from API (paginate — max 2000 per page)
+  try {
+    console.log('[aiq] Fetching contacts from Alpine IQ...');
+    let all = [], start = 0;
+    const limit = 2000;
+    while (true) {
+      const url = `${AIQ_BASE}/api/v1.1/piis/${AIQ_UID}?search=%20&limit=${limit}&start=${start}&sort=points&dir=desc`;
+      const r = await fetch(url, { headers: { 'X-APIKEY': AIQ_KEY } });
+      if (!r.ok) { console.error('[aiq] API error:', r.status, await r.text().catch(() => '')); break; }
+      const body = await r.json();
+      const batch = (body.data && body.data.results) || [];
+      all = all.concat(batch);
+      if (batch.length < limit) break;
+      start += limit;
+    }
+    if (all.length > 0) {
+      _dbAiqIngest(all);
+      _aiqCache = all; _aiqCacheTime = Date.now();
+      console.log('[aiq] Cached', all.length, 'contacts (total personas:', all.length, ')');
+    }
+    return _aiqCache || [];
+  } catch (e) {
+    console.error('[aiq] Fetch error:', e.message);
+    // Fall back to DB cache if API fails
+    if (fromDb) return fromDb;
+    const rows = db.prepare('SELECT data FROM aiq_contacts').all();
+    if (rows.length) {
+      _aiqCache = rows.map(r => JSON.parse(r.data));
+      _aiqCacheTime = Date.now();
+      return _aiqCache;
+    }
+    return [];
+  }
+}
+
+// Build a srcID → AIQ data lookup map for fast enrichment
+let _aiqMapCache = null, _aiqMapTime = 0;
+async function getAiqLookup() {
+  if (_aiqMapCache && Date.now() - _aiqMapTime < AIQ_TTL) return _aiqMapCache;
+  const contacts = await fetchAiqContacts();
+  const map = new Map();
+  for (const c of contacts) {
+    if (c.srcID) map.set(c.srcID, c);
+  }
+  _aiqMapCache = map; _aiqMapTime = Date.now();
+  return map;
+}
+
+// Enrich a Flowhub customer array with AIQ loyalty data
+async function enrichWithAiq(customers) {
+  if (!AIQ_KEY || !AIQ_UID || isDemo()) return customers;
+  try {
+    const lookup = await getAiqLookup();
+    if (lookup.size === 0) return customers;
+    return customers.map(c => {
+      const id = c.id || c._id || c.customerId || '';
+      const aiq = lookup.get(id);
+      if (!aiq) return c;
+      return {
+        ...c,
+        loyaltyPoints: aiq.loyaltyPoints || 0,
+        isLoyal: !!(aiq.loyalty),
+        aiqContactId: aiq.contactID,
+        loyaltySignup: aiq.loyaltySignupTS ? new Date(aiq.loyaltySignupTS * 1000).toISOString() : null,
+        engagementTier: aiq.leakyBucket || null,
+        aiqEmail: aiq.email || null,
+        aiqPhone: aiq.mobilePhone || null,
+        emailOptIn: !!(aiq.emailOptInTime),
+        smsOptIn: !!(aiq.optinTime || aiq.smsconsent),
+      };
+    });
+  } catch (e) {
+    console.error('[aiq] Enrichment error:', e.message);
+    return customers;
+  }
 }
 
 // DB helpers — order cache
@@ -259,7 +372,6 @@ app.use(cors());
 app.use(express.json());
 
 // ── Session-based auth (HTML login page) ─────────────────────────────────────
-const crypto   = require('crypto');
 const bcrypt   = require('bcryptjs');
 const sessions = new Map(); // token → { user, demo }
 const DEMO_USERS = new Set(['617Demo']); // usernames that get demo data
@@ -339,7 +451,7 @@ if (LEGACY_PASS || fs.existsSync(USERS_FILE)) {
     if (ok) {
       const token = crypto.randomBytes(32).toString('hex');
       sessions.set(token, { user, demo: DEMO_USERS.has(user) });
-      res.setHeader('Set-Cookie', 'dash_sess=' + token + '; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000');
+      res.setHeader('Set-Cookie', 'dash_sess=' + token + '; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000');
       logAccess('LOGIN_OK', user, req);
       return res.redirect('/dashboard.html');
     }
@@ -579,8 +691,10 @@ async function fetchAllCustomers() {
     if (batch.length < 500) break;
     page++;
   }
+  // Enrich with Alpine IQ loyalty data (points, tier, opt-in status)
+  all = await enrichWithAiq(all);
   _custCache = all; _custCacheTime = Date.now();
-  console.log("Customers cached:", all.length);
+  console.log("Customers cached:", all.length, '(AIQ enriched)');
   return all;
 }
 
@@ -694,7 +808,7 @@ async function computeTopProducts(start, end, limit) {
     pm[n].transactions++;
   }));
   const products = Object.entries(pm)
-    .map(([name, v]) => ({name, revenue: Math.round(v.revenue), units: v.units, transactions: v.transactions}))
+    .map(([name, v]) => ({name, revenue: Math.round(v.revenue), units: v.units, avgPrice: v.units ? +(v.revenue / v.units).toFixed(2) : 0, transactions: v.transactions}))
     .sort((a, b) => b.revenue - a.revenue).slice(0, limit || 10);
   return {startDate: start, endDate: end, products};
 }
@@ -861,17 +975,20 @@ async function computeWeeklySkuSales(keyword, startDate, endDate) {
         matchedSkus.add(i.productName || 'Unknown');
         if (!byWeek[wk]) byWeek[wk] = {weekOf: wk, units: 0, revenue: 0, skus: {}};
         const qty = i.quantity || 1;
+        const rev = i.totalPrice || 0;
         byWeek[wk].units += qty;
-        byWeek[wk].revenue += (i.totalPrice || 0);
+        byWeek[wk].revenue += rev;
         const sn = i.productName || 'Unknown';
-        byWeek[wk].skus[sn] = (byWeek[wk].skus[sn] || 0) + qty;
+        if (!byWeek[wk].skus[sn]) byWeek[wk].skus[sn] = {units: 0, revenue: 0};
+        byWeek[wk].skus[sn].units += qty;
+        byWeek[wk].skus[sn].revenue += rev;
       }
     });
   });
   const weeks = Object.values(byWeek).sort((a, b) => a.weekOf.localeCompare(b.weekOf));
   weeks.forEach(w => {
     w.revenue = Math.round(w.revenue);
-    w.skus = Object.entries(w.skus).map(([name, units]) => ({name, units})).sort((a, b) => b.units - a.units);
+    w.skus = Object.entries(w.skus).map(([name, v]) => ({name, units: v.units, revenue: Math.round(v.revenue), avgPrice: v.units ? +(v.revenue / v.units).toFixed(2) : 0})).sort((a, b) => b.units - a.units);
   });
   return {keyword, matchedSkuNames: [...matchedSkus].sort(), startDate: start, endDate: end, totalUnits: weeks.reduce((s, w) => s + w.units, 0), weeks};
 }
@@ -891,17 +1008,20 @@ async function computeDailySkuSales(keyword, days, startDate, endDate) {
         matchedSkus.add(i.productName || 'Unknown');
         if (!byDay[date]) byDay[date] = {date, units: 0, revenue: 0, skus: {}};
         const qty = i.quantity || 1;
+        const rev = i.totalPrice || 0;
         byDay[date].units += qty;
-        byDay[date].revenue += (i.totalPrice || 0);
+        byDay[date].revenue += rev;
         const sn = i.productName || 'Unknown';
-        byDay[date].skus[sn] = (byDay[date].skus[sn] || 0) + qty;
+        if (!byDay[date].skus[sn]) byDay[date].skus[sn] = {units: 0, revenue: 0};
+        byDay[date].skus[sn].units += qty;
+        byDay[date].skus[sn].revenue += rev;
       }
     });
   });
   const days_list = Object.values(byDay).sort((a, b) => a.date.localeCompare(b.date));
   days_list.forEach(d => {
     d.revenue = Math.round(d.revenue);
-    d.skus = Object.entries(d.skus).map(([name, units]) => ({name, units})).sort((a, b) => b.units - a.units);
+    d.skus = Object.entries(d.skus).map(([name, v]) => ({name, units: v.units, revenue: Math.round(v.revenue), avgPrice: v.units ? +(v.revenue / v.units).toFixed(2) : 0})).sort((a, b) => b.units - a.units);
   });
   return {keyword, matchedSkuNames: [...matchedSkus].sort(), startDate: start, endDate: end, totalUnits: days_list.reduce((s, d) => s + d.units, 0), days: days_list};
 }
@@ -1008,13 +1128,18 @@ async function computeInventoryVelocity(days) {
   const now = new Date(), end = now.toISOString().slice(0,10);
   const start = new Date(now.getTime() - (days||30)*MS_PER_DAY).toISOString().slice(0,10);
   const [orders, rawInv] = await Promise.all([fetchAllOrdersCached(start, end), fetchInventory()]);
-  const sold = orders.filter(o => o.orderStatus === 'sold');
+  const sold = orders.filter(o => o.orderStatus === 'sold' && !o.voided);
+  // Order names have manufacturer prefix ("Company Inc. - Brand | Product | Size")
+  // Inventory names start at brand ("Brand | Product | Size")
+  // Strip manufacturer prefix for matching
+  const norm = s => { let t = (s||'').trim(); const dash = t.indexOf(' - '); if (dash > 0 && t.indexOf('|') > dash) t = t.slice(dash + 3); return t.toLowerCase().replace(/\s+/g, ' ').trim(); };
   const unitsSold = {};
-  sold.forEach(o => (o.itemsInCart||[]).forEach(i => { const n = i.productName||'Unknown'; unitsSold[n] = (unitsSold[n]||0) + (i.quantity||1); }));
+  sold.forEach(o => (o.itemsInCart||[]).forEach(i => { const n = norm(i.productName); if (n) unitsSold[n] = (unitsSold[n]||0) + (i.quantity||1); }));
   const d = days || 30;
   const velocity = (rawInv.data || []).filter(p => parseInt(p.quantity||0) > 0).map(p => {
     const name = p.productName || p.variantName || 'Unknown';
-    const qty = parseInt(p.quantity||0), s = unitsSold[name]||0, rate = s/d;
+    const key = norm(name);
+    const qty = parseInt(p.quantity||0), s = unitsSold[key]||0, rate = s/d;
     return {name, category: p.category||'Other', currentQty: qty, unitsSold: s, dailyRate: +rate.toFixed(2), daysRemaining: rate > 0 ? Math.round(qty/rate) : null};
   }).filter(p => p.unitsSold > 0).sort((a,b) => (a.daysRemaining||9999)-(b.daysRemaining||9999));
   return {analysisWindowDays: d, startDate: start, endDate: end, critical: velocity.filter(p => p.daysRemaining !== null && p.daysRemaining <= 7).slice(0,20), warning: velocity.filter(p => p.daysRemaining !== null && p.daysRemaining > 7 && p.daysRemaining <= 14).slice(0,20), allProducts: velocity.slice(0,50)};
@@ -1024,9 +1149,10 @@ async function computeDeadStock(days) {
   const now = new Date(), end = now.toISOString().slice(0,10);
   const start = new Date(now.getTime() - (days||30)*MS_PER_DAY).toISOString().slice(0,10);
   const [orders, rawInv] = await Promise.all([fetchAllOrdersCached(start, end), fetchInventory()]);
+  const norm = s => { let t = (s||'').trim(); const dash = t.indexOf(' - '); if (dash > 0 && t.indexOf('|') > dash) t = t.slice(dash + 3); return t.toLowerCase().replace(/\s+/g, ' ').trim(); };
   const soldNames = new Set();
-  orders.filter(o => o.orderStatus === 'sold').forEach(o => (o.itemsInCart||[]).forEach(i => { if (i.productName) soldNames.add(i.productName); }));
-  const dead = (rawInv.data||[]).filter(p => parseInt(p.quantity||0) > 0 && !soldNames.has(p.productName||p.variantName||'')).map(p => ({name: p.productName||p.variantName||'Unknown', category: p.category||'Other', qty: parseInt(p.quantity||0), price: p.preTaxPriceInPennies ? p.preTaxPriceInPennies/100 : (p.postTaxPriceInPennies ? p.postTaxPriceInPennies/100 : 0)})).sort((a,b) => b.qty-a.qty);
+  orders.filter(o => o.orderStatus === 'sold' && !o.voided).forEach(o => (o.itemsInCart||[]).forEach(i => { const n = norm(i.productName); if (n) soldNames.add(n); }));
+  const dead = (rawInv.data||[]).filter(p => parseInt(p.quantity||0) > 0 && !soldNames.has(norm(p.productName||p.variantName||''))).map(p => ({name: p.productName||p.variantName||'Unknown', category: p.category||'Other', qty: parseInt(p.quantity||0), price: p.preTaxPriceInPennies ? p.preTaxPriceInPennies/100 : (p.postTaxPriceInPennies ? p.postTaxPriceInPennies/100 : 0)})).sort((a,b) => b.qty-a.qty);
   return {windowDays: days||30, startDate: start, endDate: end, deadStockCount: dead.length, estimatedValue: Math.round(dead.reduce((s,p) => s+p.qty*p.price, 0)), products: dead.slice(0,30)};
 }
 
@@ -1035,7 +1161,7 @@ async function computeLapsedCustomers(daysSince, limit) {
   const all = await fetchAllCustomers();
   const cutoff = new Date(Date.now() - thresh*MS_PER_DAY);
   const allLapsed = all.filter(c => { if (!c.updatedAt) return false; const d = new Date(c.updatedAt); return d < cutoff && d.getFullYear() > 2000; });
-  const customers = allLapsed.map(c => ({name: (c.name || ((c.firstName||'') + ' ' + (c.lastName||'')).trim() || 'Unknown').trim(), email: c.email||null, phone: c.phone||null, lastVisit: new Date(c.updatedAt).toLocaleDateString('en-CA',{timeZone:'America/New_York'}), daysSince: Math.floor((Date.now()-new Date(c.updatedAt))/MS_PER_DAY), loyaltyPoints: c.loyaltyPoints||0, isLoyal: !!(c.isLoyal||c.loyaltyPoints>0)})).sort((a,b) => a.daysSince-b.daysSince).slice(0, limit||25);
+  const customers = allLapsed.map(c => ({name: (c.name || ((c.firstName||'') + ' ' + (c.lastName||'')).trim() || 'Unknown').trim(), email: c.email||c.aiqEmail||null, phone: c.phone||c.aiqPhone||null, lastVisit: new Date(c.updatedAt).toLocaleDateString('en-CA',{timeZone:'America/New_York'}), daysSince: Math.floor((Date.now()-new Date(c.updatedAt))/MS_PER_DAY), loyaltyPoints: c.loyaltyPoints||0, isLoyal: !!(c.isLoyal||c.loyaltyPoints>0), engagementTier: c.engagementTier||null})).sort((a,b) => a.daysSince-b.daysSince).slice(0, limit||25);
   return {threshold: thresh, totalLapsed: allLapsed.length, customers};
 }
 
@@ -1690,6 +1816,166 @@ async function generateCsvReport(reportType, startDate, endDate) {
   };
 }
 
+// ── Customer Segment Builder (AIQ export) ────────────────────────────────────
+async function buildCustomerSegment(input) {
+  const all = await fetchAllCustomers();
+  const now = Date.now();
+
+  // Build customer ID → order stats map if we need behavioral filters
+  const needOrders = input.min_spend || input.max_spend || input.min_visits || input.max_visits
+    || input.bought_product || input.min_avg_basket || input.max_avg_basket
+    || input.active_last_days || input.inactive_days;
+  let orderStats = {};
+  if (needOrders) {
+    const lookback = Math.max(input.active_last_days || 0, input.inactive_days || 0, 365);
+    const start = new Date(now - lookback * MS_PER_DAY).toISOString().slice(0, 10);
+    const end = new Date().toLocaleDateString('en-CA', {timeZone: 'America/New_York'});
+    const orders = (await fetchAllOrdersCached(start, end)).filter(o => o.orderStatus === 'sold' && o.completedOn);
+    orders.forEach(o => {
+      const cid = o.customerId || 'unknown';
+      if (!orderStats[cid]) orderStats[cid] = {revenue: 0, visits: 0, lastOrder: null, products: new Set()};
+      const s = orderStats[cid];
+      s.revenue += oTotal(o);
+      s.visits++;
+      const orderDate = new Date(o.completedOn);
+      if (!s.lastOrder || orderDate > s.lastOrder) s.lastOrder = orderDate;
+      (o.itemsInCart || []).forEach(i => { if (i.productName) s.products.add(i.productName.toLowerCase()); });
+    });
+  }
+
+  let filtered = all;
+
+  // Loyalty filters
+  if (input.loyalty_only) filtered = filtered.filter(c => c.isLoyal || (c.loyaltyPoints || 0) > 0);
+  if (input.min_loyalty_points != null) filtered = filtered.filter(c => (c.loyaltyPoints || 0) >= input.min_loyalty_points);
+  if (input.max_loyalty_points != null) filtered = filtered.filter(c => (c.loyaltyPoints || 0) <= input.max_loyalty_points);
+
+  // Engagement tier filter (AIQ leaky bucket)
+  if (input.engagement_tier) filtered = filtered.filter(c => (c.engagementTier || '').toLowerCase() === input.engagement_tier.toLowerCase());
+
+  // Consent filters (AIQ is source of truth)
+  if (input.consents_email) filtered = filtered.filter(c => c.emailOptIn);
+  if (input.consents_sms) filtered = filtered.filter(c => c.smsOptIn);
+
+  // Customer type
+  if (input.customer_type) filtered = filtered.filter(c => (c.type || '').toLowerCase().includes(input.customer_type.toLowerCase()));
+
+  // Created date filters
+  if (input.created_after) {
+    const d = new Date(input.created_after + 'T00:00:00Z');
+    filtered = filtered.filter(c => new Date(c.createdAt || 0) >= d);
+  }
+  if (input.created_before) {
+    const d = new Date(input.created_before + 'T23:59:59Z');
+    filtered = filtered.filter(c => new Date(c.createdAt || 0) <= d);
+  }
+
+  // Behavioral filters (order-based)
+  if (needOrders) {
+    filtered = filtered.filter(c => {
+      const cid = c.id || c._id || c.customerId;
+      const s = orderStats[cid];
+      if (!s && (input.min_spend || input.min_visits || input.bought_product || input.active_last_days))
+        return false; // no orders = doesn't meet positive behavioral criteria
+      if (!s) return true; // no orders but only negative filters (max_spend, inactive_days)
+
+      if (input.min_spend && s.revenue < input.min_spend) return false;
+      if (input.max_spend && s.revenue > input.max_spend) return false;
+      if (input.min_visits && s.visits < input.min_visits) return false;
+      if (input.max_visits && s.visits > input.max_visits) return false;
+      if (input.min_avg_basket && (s.revenue / s.visits) < input.min_avg_basket) return false;
+      if (input.max_avg_basket && (s.revenue / s.visits) > input.max_avg_basket) return false;
+      if (input.bought_product) {
+        const kw = input.bought_product.toLowerCase();
+        if (![...s.products].some(p => p.includes(kw))) return false;
+      }
+      if (input.active_last_days) {
+        const cutoff = new Date(now - input.active_last_days * MS_PER_DAY);
+        if (!s.lastOrder || s.lastOrder < cutoff) return false;
+      }
+      if (input.inactive_days) {
+        const cutoff = new Date(now - input.inactive_days * MS_PER_DAY);
+        if (s.lastOrder && s.lastOrder >= cutoff) return false; // still active
+      }
+      return true;
+    });
+  }
+
+  // Require contactable (must have email or phone for AIQ match)
+  if (input.require_contactable !== false) {
+    filtered = filtered.filter(c => (c.email && c.email.trim()) || (c.aiqEmail && c.aiqEmail.trim()) || (c.phone && c.phone.trim()) || (c.aiqPhone && c.aiqPhone.trim()));
+  }
+
+  // Build CSV rows
+  function csvEsc(v) {
+    const s = String(v || '');
+    return (s.includes(',') || s.includes('"') || s.includes('\n')) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+  const headers = ['email', 'phone', 'firstName', 'lastName', 'loyaltyPoints', 'isLoyal', 'engagementTier', 'emailOptIn', 'smsOptIn', 'customerType', 'createdAt'];
+  const rows = filtered.map(c => {
+    const name = (c.name || ((c.firstName || '') + ' ' + (c.lastName || '')).trim() || '').trim();
+    const parts = name.split(' ');
+    const firstName = c.firstName || parts[0] || '';
+    const lastName = c.lastName || parts.slice(1).join(' ') || '';
+    return [
+      c.email || c.aiqEmail || '',
+      c.phone || c.aiqPhone || '',
+      firstName,
+      lastName,
+      c.loyaltyPoints || 0,
+      (c.isLoyal || (c.loyaltyPoints || 0) > 0) ? 'true' : 'false',
+      c.engagementTier || '',
+      c.emailOptIn ? 'true' : 'false',
+      c.smsOptIn ? 'true' : 'false',
+      c.type || '',
+      c.createdAt ? new Date(c.createdAt).toLocaleDateString('en-CA', {timeZone: 'America/New_York'}) : ''
+    ];
+  });
+
+  const csvData = [headers.join(','), ...rows.map(r => r.map(csvEsc).join(','))].join('\r\n');
+  const segName = input.segment_name || 'custom_segment';
+  const csvFilename = `617thc_aiq_${segName.replace(/[^a-zA-Z0-9_-]/g, '_')}_${new Date().toLocaleDateString('en-CA', {timeZone: 'America/New_York'})}.csv`;
+
+  // Build a human-readable summary of applied filters
+  const appliedFilters = [];
+  if (input.loyalty_only) appliedFilters.push('loyalty members only');
+  if (input.min_loyalty_points != null) appliedFilters.push('≥' + input.min_loyalty_points + ' loyalty points');
+  if (input.max_loyalty_points != null) appliedFilters.push('≤' + input.max_loyalty_points + ' loyalty points');
+  if (input.consents_email) appliedFilters.push('opted in to email');
+  if (input.consents_sms) appliedFilters.push('opted in to SMS');
+  if (input.customer_type) appliedFilters.push('type: ' + input.customer_type);
+  if (input.created_after) appliedFilters.push('created after ' + input.created_after);
+  if (input.created_before) appliedFilters.push('created before ' + input.created_before);
+  if (input.min_spend) appliedFilters.push('spent ≥$' + input.min_spend);
+  if (input.max_spend) appliedFilters.push('spent ≤$' + input.max_spend);
+  if (input.min_visits) appliedFilters.push('≥' + input.min_visits + ' visits');
+  if (input.max_visits) appliedFilters.push('≤' + input.max_visits + ' visits');
+  if (input.min_avg_basket) appliedFilters.push('avg basket ≥$' + input.min_avg_basket);
+  if (input.max_avg_basket) appliedFilters.push('avg basket ≤$' + input.max_avg_basket);
+  if (input.bought_product) appliedFilters.push('purchased "' + input.bought_product + '"');
+  if (input.active_last_days) appliedFilters.push('active in last ' + input.active_last_days + ' days');
+  if (input.inactive_days) appliedFilters.push('inactive ' + input.inactive_days + '+ days');
+  if (input.require_contactable !== false) appliedFilters.push('has email or phone');
+
+  const withEmail = rows.filter(r => r[0]).length;
+  const withPhone = rows.filter(r => r[1]).length;
+  const withBoth = rows.filter(r => r[0] && r[1]).length;
+
+  return {
+    csvData, csvFilename,
+    summary: `AIQ segment "${segName}" ready: ${csvFilename} — ${rows.length} customers. ` +
+      `Contact coverage: ${withEmail} with email, ${withPhone} with phone, ${withBoth} with both. ` +
+      `Filters: ${appliedFilters.join(', ') || 'none'}. ` +
+      `Total customer pool: ${all.length}.`,
+    segmentName: segName,
+    rowCount: rows.length,
+    totalPool: all.length,
+    contactCoverage: {withEmail, withPhone, withBoth},
+    filters: appliedFilters,
+    headers
+  };
+}
+
 // ── Tool definitions ──────────────────────────────────────────────────────────
 
 const TOOLS = [
@@ -1705,7 +1991,7 @@ const TOOLS = [
   },
   {
     name: 'get_top_products',
-    description: 'Returns top-selling products ranked by revenue for a date range. Use for product performance, bestseller lists, or category analysis over any time period.',
+    description: 'Returns top-selling products ranked by revenue for a date range. Each product includes revenue, units, avgPrice (revenue/units), and transaction count. Use for product performance, bestseller lists, price point analysis, or category analysis over any time period.',
     input_schema: {type: 'object', properties: {start_date: {type: 'string', description: 'Start date YYYY-MM-DD'}, end_date: {type: 'string', description: 'End date YYYY-MM-DD'}, limit: {type: 'number', description: 'Number of products to return. Default: 10.'}}, required: ['start_date', 'end_date']}
   },
   {
@@ -1740,12 +2026,12 @@ const TOOLS = [
   },
   {
     name: 'get_weekly_sku_sales',
-    description: 'Returns weekly unit sales and revenue for all products whose names match a keyword or multi-word phrase. Use when someone asks about weekly trends for a product type, size, or category — e.g. "7g flower", "28g shake", "Oreoz", "edibles". All words in the keyword must appear in the product name. Returns one row per week with unit totals and a per-SKU breakdown.',
+    description: 'Returns weekly unit sales and revenue for all products whose names match a keyword or multi-word phrase. Each week includes a per-SKU breakdown with units, revenue, and avgPrice (revenue/units) for price point analysis. Use when someone asks about weekly trends for a product type, size, or category, or which products sold at a specific price — e.g. "7g flower", "28g shake", "Oreoz", "edibles", "which 3.5s were $12 last week". All words in the keyword must appear in the product name. Returns one row per week with unit totals and a per-SKU breakdown.',
     input_schema: {type: 'object', properties: {keyword: {type: 'string', description: 'Word or phrase to match against product names. All terms must be present. E.g. "7g flower", "28g shake", "Galactic Warhead", "cartridge"'}, start_date: {type: 'string', description: 'Start date YYYY-MM-DD'}, end_date: {type: 'string', description: 'End date YYYY-MM-DD. Defaults to today.'}}, required: ['keyword', 'start_date']}
   },
   {
     name: 'get_daily_sku_sales',
-    description: 'Returns DAY-BY-DAY unit sales and revenue for all products whose names match a keyword. Use when someone asks about daily units sold, how many sold per day, last N days breakdown by day, or any question where the answer should show one row per calendar day. E.g. "how many 3.5s sold each of the past 7 days", "daily edible sales this week", "show me daily 7g units". All words in the keyword must appear in the product name.',
+    description: 'Returns DAY-BY-DAY unit sales and revenue for all products whose names match a keyword. Each day includes a per-SKU breakdown with units, revenue, and avgPrice (revenue/units) so you can identify exact price points per product per day. Use when someone asks about daily units sold, which products sold at a specific price, price point analysis, how many sold per day, or any question where the answer should show one row per calendar day. E.g. "which 3.5s sold at $12 last week", "how many 3.5s sold each of the past 7 days", "daily edible sales this week". All words in the keyword must appear in the product name.',
     input_schema: {type: 'object', properties: {keyword: {type: 'string', description: 'Word or phrase to match against product names. All terms must be present. E.g. "3.5", "7g", "edible", "617 3.5"'}, days: {type: 'number', description: 'Number of past days to show (default: 7)'}, start_date: {type: 'string', description: 'Optional explicit start date YYYY-MM-DD. Overrides days.'}, end_date: {type: 'string', description: 'Optional explicit end date YYYY-MM-DD. Defaults to today.'}}, required: ['keyword']}
   },
   {
@@ -1915,6 +2201,36 @@ const TOOLS = [
       },
       required: ['report_type']
     }
+  },
+  {
+    name: 'build_customer_segment',
+    description: 'Builds a custom customer segment and generates an Alpine IQ–ready CSV with email, phone, firstName, lastName, loyaltyPoints, consent flags, and customerType. Use when someone asks to create a segment, build a list, export customers for a campaign, identify a customer group for messaging, or anything involving targeting customers based on behavior, loyalty, spend, visit frequency, product purchase history, or activity recency. The CSV is formatted for direct upload to Alpine IQ. Example prompts: "build a segment of loyalty members who spent over $500 and opted in to SMS", "give me a list of customers who bought Oreoz in the last 30 days", "segment lapsed customers inactive 60+ days who consent to email".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        segment_name:        {type: 'string', description: 'A short descriptive name for this segment. E.g. "high_value_sms", "oreoz_buyers_30d", "lapsed_loyalty"'},
+        loyalty_only:        {type: 'boolean', description: 'If true, only include loyalty program members'},
+        min_loyalty_points:  {type: 'number', description: 'Minimum loyalty points balance'},
+        max_loyalty_points:  {type: 'number', description: 'Maximum loyalty points balance'},
+        engagement_tier:     {type: 'string', description: 'Filter by Alpine IQ engagement tier: "Active", "Chilling", or "Absent"'},
+        consents_email:      {type: 'boolean', description: 'If true, only include customers who opted in to promotional email'},
+        consents_sms:        {type: 'boolean', description: 'If true, only include customers who opted in to promotional SMS'},
+        customer_type:       {type: 'string', description: 'Filter by customer type: "rec" for recreational, "med" for medical'},
+        created_after:       {type: 'string', description: 'Only customers created after this date. YYYY-MM-DD'},
+        created_before:      {type: 'string', description: 'Only customers created before this date. YYYY-MM-DD'},
+        min_spend:           {type: 'number', description: 'Minimum total revenue spent (dollars) in the lookback window (up to 365 days)'},
+        max_spend:           {type: 'number', description: 'Maximum total revenue spent (dollars)'},
+        min_visits:          {type: 'number', description: 'Minimum number of completed transactions'},
+        max_visits:          {type: 'number', description: 'Maximum number of completed transactions'},
+        min_avg_basket:      {type: 'number', description: 'Minimum average basket size (dollars)'},
+        max_avg_basket:      {type: 'number', description: 'Maximum average basket size (dollars)'},
+        bought_product:      {type: 'string', description: 'Only customers who purchased a product matching this keyword. E.g. "Oreoz", "3.5g flower", "cartridge"'},
+        active_last_days:    {type: 'number', description: 'Only include customers with a purchase in the last N days (active customers)'},
+        inactive_days:       {type: 'number', description: 'Only include customers with NO purchase in the last N days (lapsed/inactive customers)'},
+        require_contactable: {type: 'boolean', description: 'If true (default), only include customers who have an email or phone on file. Set false to include all.'}
+      },
+      required: ['segment_name']
+    }
   }
 ];
 
@@ -1957,6 +2273,7 @@ async function executeTool(name, input) {
     if (name === 'get_discount_elasticity')   return await computeDiscountElasticity(input.start_date, input.end_date);
     if (name === 'get_brand_comparison')      return await computeBrandComparison(input.brand_a, input.brand_b, input.start_date, input.end_date);
     if (name === 'generate_csv')              return await generateCsvReport(input.report_type, input.start_date, input.end_date);
+    if (name === 'build_customer_segment')  return await buildCustomerSegment(input);
     return {error: 'Unknown tool: ' + name};
   } catch(e) { return {error: e.message}; }
 }
@@ -1981,6 +2298,19 @@ TOOL SELECTION RULES:
 - When a user asks how many of a product type were sold "each day", "per day", "daily", "past N days", or "last N days", ALWAYS use get_daily_sku_sales — NOT get_weekly_sku_sales. get_weekly_sku_sales groups by week and will NOT answer per-day questions correctly.
 - When a user asks about margin, profit, gross profit, or COGS for a product type broken down by day, ALWAYS use get_daily_sku_margin. Never use get_margin_analysis for per-day breakdowns — it only returns aggregate totals.
 - When the user asks for a table, spreadsheet, CSV, export, or download of data (e.g. "give me hourly transactions", "export daily revenue", "download a breakdown"), ALWAYS use generate_csv. Choose the most appropriate report_type: hourly_by_day for hour-by-day grids, hourly_by_weekday for weekday patterns, daily_summary for per-day totals, weekly_summary for per-week totals, top_products for product rankings, hourly_heatmap for aggregate hour-of-day averages. After calling generate_csv, confirm what was generated and tell the user the download button will appear below.
+
+LOYALTY DATA (Alpine IQ Integration):
+- Customer loyalty data comes from Alpine IQ (AIQ), merged onto Flowhub customer records.
+- loyaltyPoints: numeric points balance from AIQ (e.g. 14133.77)
+- isLoyal: true if customer is enrolled in the loyalty program
+- engagementTier: AIQ's "leaky bucket" classification — "Active" (regular buyer), "Chilling" (slowing down), "Absent" (gone cold), or null (not tracked)
+- When users ask about loyalty members, points, engagement tiers, or re-engagement campaigns, use these fields.
+- Points are earned through purchases and can be redeemed for discounts.
+
+CATEGORY TERMINOLOGY:
+- "Joint" is the Flowhub category name. When a user says "preroll", "pre-roll", "pre roll", "PRJ", or "prerolls", they mean the "Joint" category. Always search/filter using category "Joint".
+- "Edible" includes gummies, chocolates, lozenges, mints, etc.
+- "Accessories" includes lighters, rolling papers, batteries, and tinctures (tinctures are classified as accessories in Flowhub because they contain no THC and are exempt from cannabis excise tax).
 
 STRICT BRAND/PRODUCT RULES:
 - Never assume two brand or product names are the same or similar. If a user asks about "Green Meadows" search for exactly that — do not substitute "Chicago Greens" or any other brand.
@@ -2068,7 +2398,7 @@ app.post("/api/chat", express.json(), async(req, res) => {
                 data: result.data
               };
             }
-            if (tu.name === 'generate_csv' && result.csvData) {
+            if ((tu.name === 'generate_csv' || tu.name === 'build_customer_segment') && result.csvData) {
               csvPayload = {filename: result.csvFilename, data: result.csvData};
               // Send AI only a lightweight summary, not the full CSV blob
               return {type: 'tool_result', tool_use_id: tu.id,
@@ -2102,17 +2432,21 @@ async function warmCaches() {
     console.log('[warmup] Phase 1 done — dashboard will load instantly');
   } catch(e) { console.error('[warmup] Phase 1 error:', e.message); }
 
-  // Phase 2 (background): full order history — needed for AI deep queries
-  console.log('[warmup] Phase 2: full order history (background)...');
+  // Phase 2 (background): full order history + AIQ loyalty — needed for AI deep queries
+  console.log('[warmup] Phase 2: full order history + AIQ loyalty (background)...');
   fetchAllOrdersCached('2020-01-01', today)
-    .then(() => console.log('[warmup] Phase 2 done — full order history ready (' + _dbOrderCount() + ' orders)'))
-    .catch(e => console.error('[warmup] Phase 2 error:', e.message));
+    .then(() => console.log('[warmup] Phase 2a done — full order history ready (' + _dbOrderCount() + ' orders)'))
+    .catch(e => console.error('[warmup] Phase 2a error:', e.message));
+  fetchAiqContacts()
+    .then(c => console.log('[warmup] Phase 2b done — AIQ loyalty loaded (' + c.length + ' contacts)'))
+    .catch(e => console.error('[warmup] Phase 2b error:', e.message));
 }
 
 app.listen(PORT, () => {
   console.log("\n✅ Flowhub proxy running!");
   console.log("   Open: http://localhost:" + PORT + "/dashboard.html");
   console.log("   Credentials: " + (process.env.FLOWHUB_API_KEY && LOC ? "YES ✅" : "NO ❌ check .env"));
+  console.log("   Alpine IQ: " + (AIQ_KEY && AIQ_UID ? "YES ✅ (UID " + AIQ_UID + ")" : "NO ❌ set AIQ_API_KEY + AIQ_UID in .env"));
   console.log("   Demo DB: " + (fs.existsSync(__dirname + '/demo.db') ? "YES ✅ (login as demo user)" : "NO — run: node generate-demo-data.js") + "\n");
   warmCaches();
   // Proactive background poll — keeps today's orders current even when nobody is on the dashboard

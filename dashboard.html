@@ -3,7 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Flowhub Analytics</title>
+<title>Diggory — Analytics</title>
+<link rel="icon" type="image/png" href="/diggory_favicon2.png" />
+<link rel="apple-touch-icon" href="/diggory_favicon2.png" />
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#0a0a0a;color:#f0e8d8;font-family:'Courier New',monospace;height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidden;font-size:16px}
@@ -16,9 +18,14 @@ body{background:#0a0a0a;color:#f0e8d8;font-family:'Courier New',monospace;height
 @keyframes sweep{0%{transform:translateX(-300%)}100%{transform:translateX(600%)}}
 .loading-pulse{animation:pulse-fade 1.4s ease-in-out infinite}
 .header{background:#141414;border-bottom:2px solid #333;padding:12px 22px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;position:relative}
-.hdr-logo{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;align-items:center;pointer-events:none}
-.hdr-logo svg{height:30px;width:auto}
+.hdr-logo{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;align-items:center;gap:14px;pointer-events:none}
+.hdr-logo svg{height:36px;width:auto}
+.hdr-logo-sep{color:#333;font-size:20px;line-height:1;font-weight:200}
+.clyde-logo-img{height:36px;width:auto}
 .mob-logo{display:none}
+.mob-logo-inner{display:flex;align-items:center;gap:12px}
+.mob-logo svg{height:38px;width:auto}
+.mob-clyde-logo{height:40px;width:auto}
 .logo{display:flex;align-items:center;gap:12px;font-size:16px;font-weight:bold;letter-spacing:.12em}
 .dot{width:9px;height:9px;border-radius:50%;background:#666}
 .dot.live{background:#5dcc8a;box-shadow:0 0 8px #5dcc8a}
@@ -33,7 +40,9 @@ body{background:#0a0a0a;color:#f0e8d8;font-family:'Courier New',monospace;height
 .key-bar input{flex:1;background:#1e1e1e;border:1px solid #444;color:#f0e8d8;padding:7px 12px;border-radius:3px;font-size:14px;font-family:inherit;outline:none}
 .key-bar button{background:#c8922a;border:none;color:#000;padding:7px 16px;border-radius:3px;cursor:pointer;font-size:14px;font-weight:bold;font-family:inherit}
 .body{display:flex;flex:1;overflow:hidden}
-.left{width:425px;border-right:2px solid #333;display:flex;flex-direction:column;overflow:hidden;flex-shrink:0}
+.left{width:25vw;min-width:340px;max-width:50vw;border-right:none;display:flex;flex-direction:column;overflow:hidden;flex-shrink:0}
+.divider{width:5px;background:#333;cursor:col-resize;flex-shrink:0;position:relative;transition:background .15s}
+.divider:hover,.divider.active{background:#c8922a}
 .tabs{display:flex;background:#141414;border-bottom:2px solid #333}
 .tab{flex:1;padding:10px 4px;font-size:13px;background:transparent;border:none;cursor:pointer;text-transform:uppercase;letter-spacing:.12em;color:#888;border-bottom:3px solid transparent;font-family:inherit}
 .tab.on{color:#c8922a;border-bottom-color:#c8922a}
@@ -143,7 +152,8 @@ body{background:#0a0a0a;color:#f0e8d8;font-family:'Courier New',monospace;height
 
   /* Layout: fill viewport, one panel at a time */
   .body{flex-direction:column}
-  .left{width:100%;border-right:none;flex:1;min-height:0}
+  .left{width:100%!important;min-width:0;max-width:none;flex:1;min-height:0}
+  .divider{display:none}
   .right{flex:1;min-height:0}
   .mob-hidden{display:none!important}
 
@@ -184,13 +194,15 @@ body{background:#0a0a0a;color:#f0e8d8;font-family:'Courier New',monospace;height
 <div class="header">
   <div class="logo">
     <div class="dot" id="dot"></div>
-    <span>FLOWHUB ANALYTICS</span>
+    <span>FLOWHUB</span>
     <span class="badge" id="badge">CONNECTING</span>
     <span style="font-size:13px;color:#888;margin-left:4px" id="sync"></span>
     <button id="reloadBtn" onclick="reloadData()" title="Refresh data" style="background:none;border:none;cursor:pointer;color:#555;font-size:16px;padding:0 0 0 7px;line-height:1;display:none" aria-label="Refresh">&#8635;</button>
   </div>
   <!-- 617THC logo: centered between left indicators and right buttons (desktop only) -->
   <div class="hdr-logo">
+    <img src="diggory_logo_amber.png" alt="Diggory" class="clyde-logo-img">
+    <span class="hdr-logo-sep">|</span>
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 468.88 82.49"><defs><style>.cls-1{fill:#80ecfa}.cls-2{fill:#fcfcfc;stroke:#fcfcfc;stroke-miterlimit:10}</style></defs><g id="Crown"><path class="cls-2" d="M232.35,56.51l-.96,2.76h-20.55l-.96-2.76h22.46ZM240.31,30.19c-1.86,0-3.36,1.5-3.36,3.36,0,.61.17,1.19.45,1.69l-9.09,5.11-5.59-10.28c1.05-.57,1.76-1.68,1.76-2.95,0-1.86-1.5-3.36-3.36-3.36s-3.36,1.5-3.36,3.36c0,1.27.71,2.38,1.76,2.95l-5.59,10.28-9.07-5.09c.27-.49.43-1.05.43-1.65,0-1.86-1.5-3.36-3.36-3.36s-3.36,1.5-3.36,3.36,1.5,3.36,3.36,3.36c.39,0,.76-.07,1.1-.19l6.09,17.53h24l6.1-17.57c.34.12.71.18,1.09.18,1.86,0,3.36-1.5,3.36-3.36s-1.5-3.36-3.36-3.36Z"/></g><g id="Type"><g><path class="cls-1" d="M282.46,58.15V18.05c-5.2,0-13.16.78-16.93,2.23l-2.35,1,1.73-19.72h52.13l1.84,19.72-2.35-1c-3.67-1.56-11.83-2.23-17.03-2.23v40.11c0,5.12.51,15.26,2.14,19.72l.82,2h-22.75l.71-2c.41-1.11.71-2.56,1.02-4.23.82-5.01,1.02-11.7,1.02-15.49Z"/><path class="cls-1" d="M378.25,58.15v-9.14h-25.21v9.14c0,5.12.49,15.26,2.07,19.72l.79,2h-21.96l.79-2c1.58-4.35,1.87-14.71,1.87-19.72V23.39c0-5.12-.3-15.49-1.87-19.83l-.79-2h21.96l-.79,2c-1.58,4.46-2.07,14.71-2.07,19.83v9.02h25.21v-9.02c0-5.12-.39-15.37-1.97-19.83l-.79-2h21.86l-.69,2c-1.58,4.46-1.97,14.71-1.97,19.83v34.76c0,5.01.39,15.26,1.97,19.72l.79,2h-21.96l.79-2c.39-1.11.69-2.56.98-4.23.79-5.01.98-11.7.98-15.49Z"/><path class="cls-1" d="M444.03,81.44c-25.35,0-35.45-18.05-35.45-40.77S420.81,0,444.84,0c4.75,0,8.89.78,13.23,2.12.81.33,1.72.45,2.83.45.81,0,1.82,0,2.52-.33l2.02-.89v26.63l-2.63-3.12c-4.04-5.01-11.61-8.24-17.98-8.24-13.33,0-18.68,11.59-18.68,24.06,0,13.37,5.35,24.17,19.29,24.17,7.07,0,15.96-3.45,20.81-8.47l2.63-2.67v21.61l-.71.33c-1.72,1-3.54,1.78-5.56,2.56-6.16,2.23-13.03,3.23-18.58,3.23Z"/></g><g><path class="cls-1" d="M50.56,2.72l-3.15,2.58c-7.75,6.4-15.62,15.05-21.01,23.71,2.13-.67,4.38-1.01,6.74-1.01,16.18,0,25.28,12.36,25.28,25.84,0,15.39-10.79,28.65-29.1,28.65S0,69.35,0,53.84C0,35.87,11.68,15.53,24.6,3.17l.45-.45h25.5ZM39.66,54.63c0-6.85-2.81-11.91-10.34-11.91s-10.56,5.06-10.56,11.91,2.92,11.91,10.56,11.91c3.71,0,6.4-1.12,7.98-3.37,1.57-2.25,2.36-5.06,2.36-8.54Z"/><path class="cls-1" d="M73.18,18.79l7.42-16.07h18.2v57.07c0,5.17.56,15.39,2.36,19.89l.9,2.02h-25.05l.9-2.02c1.8-4.38,2.13-14.83,2.13-19.89V20.7l-6.85-1.91Z"/><path class="cls-1" d="M134.69,59.35l17.08-40h-8.88c-5.28,0-15.84.45-20.34,2.25l-2.58,1.12,1.91-20h54.15v8.65q-.11.11-.11.22l-20.9,48.87c-2.02,4.61-6.4,15.17-6.4,20v1.46h-26.96l2.13-2.47c1.01-1.24,2.13-2.7,3.15-4.38,2.92-4.83,5.73-11.24,7.75-15.73Z"/></g></g></svg>
   </div>
   <div class="hdr-right">
@@ -201,7 +213,11 @@ body{background:#0a0a0a;color:#f0e8d8;font-family:'Courier New',monospace;height
 </div>
 <!-- 617THC logo bar: visible above nav tabs on mobile only -->
 <div class="mob-logo">
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 468.88 82.49"><defs><style>.cls-1{fill:#80ecfa}.cls-2{fill:#fcfcfc;stroke:#fcfcfc;stroke-miterlimit:10}</style></defs><g><path class="cls-2" d="M232.35,56.51l-.96,2.76h-20.55l-.96-2.76h22.46ZM240.31,30.19c-1.86,0-3.36,1.5-3.36,3.36,0,.61.17,1.19.45,1.69l-9.09,5.11-5.59-10.28c1.05-.57,1.76-1.68,1.76-2.95,0-1.86-1.5-3.36-3.36-3.36s-3.36,1.5-3.36,3.36c0,1.27.71,2.38,1.76,2.95l-5.59,10.28-9.07-5.09c.27-.49.43-1.05.43-1.65,0-1.86-1.5-3.36-3.36-3.36s-3.36,1.5-3.36,3.36,1.5,3.36,3.36,3.36c.39,0,.76-.07,1.1-.19l6.09,17.53h24l6.1-17.57c.34.12.71.18,1.09.18,1.86,0,3.36-1.5,3.36-3.36s-1.5-3.36-3.36-3.36Z"/></g><g><g><path class="cls-1" d="M282.46,58.15V18.05c-5.2,0-13.16.78-16.93,2.23l-2.35,1,1.73-19.72h52.13l1.84,19.72-2.35-1c-3.67-1.56-11.83-2.23-17.03-2.23v40.11c0,5.12.51,15.26,2.14,19.72l.82,2h-22.75l.71-2c.41-1.11.71-2.56,1.02-4.23.82-5.01,1.02-11.7,1.02-15.49Z"/><path class="cls-1" d="M378.25,58.15v-9.14h-25.21v9.14c0,5.12.49,15.26,2.07,19.72l.79,2h-21.96l.79-2c1.58-4.35,1.87-14.71,1.87-19.72V23.39c0-5.12-.3-15.49-1.87-19.83l-.79-2h21.96l-.79,2c-1.58,4.46-2.07,14.71-2.07,19.83v9.02h25.21v-9.02c0-5.12-.39-15.37-1.97-19.83l-.79-2h21.86l-.69,2c-1.58,4.46-1.97,14.71-1.97,19.83v34.76c0,5.01.39,15.26,1.97,19.72l.79,2h-21.96l.79-2c.39-1.11.69-2.56.98-4.23.79-5.01.98-11.7.98-15.49Z"/><path class="cls-1" d="M444.03,81.44c-25.35,0-35.45-18.05-35.45-40.77S420.81,0,444.84,0c4.75,0,8.89.78,13.23,2.12.81.33,1.72.45,2.83.45.81,0,1.82,0,2.52-.33l2.02-.89v26.63l-2.63-3.12c-4.04-5.01-11.61-8.24-17.98-8.24-13.33,0-18.68,11.59-18.68,24.06,0,13.37,5.35,24.17,19.29,24.17,7.07,0,15.96-3.45,20.81-8.47l2.63-2.67v21.61l-.71.33c-1.72,1-3.54,1.78-5.56,2.56-6.16,2.23-13.03,3.23-18.58,3.23Z"/></g><g><path class="cls-1" d="M50.56,2.72l-3.15,2.58c-7.75,6.4-15.62,15.05-21.01,23.71,2.13-.67,4.38-1.01,6.74-1.01,16.18,0,25.28,12.36,25.28,25.84,0,15.39-10.79,28.65-29.1,28.65S0,69.35,0,53.84C0,35.87,11.68,15.53,24.6,3.17l.45-.45h25.5ZM39.66,54.63c0-6.85-2.81-11.91-10.34-11.91s-10.56,5.06-10.56,11.91,2.92,11.91,10.56,11.91c3.71,0,6.4-1.12,7.98-3.37,1.57-2.25,2.36-5.06,2.36-8.54Z"/><path class="cls-1" d="M73.18,18.79l7.42-16.07h18.2v57.07c0,5.17.56,15.39,2.36,19.89l.9,2.02h-25.05l.9-2.02c1.8-4.38,2.13-14.83,2.13-19.89V20.7l-6.85-1.91Z"/><path class="cls-1" d="M134.69,59.35l17.08-40h-8.88c-5.28,0-15.84.45-20.34,2.25l-2.58,1.12,1.91-20h54.15v8.65q-.11.11-.11.22l-20.9,48.87c-2.02,4.61-6.4,15.17-6.4,20v1.46h-26.96l2.13-2.47c1.01-1.24,2.13-2.7,3.15-4.38,2.92-4.83,5.73-11.24,7.75-15.73Z"/></g></g></svg>
+  <div class="mob-logo-inner">
+    <img src="diggory_logo_amber.png" alt="Diggory" class="mob-clyde-logo">
+    <span class="hdr-logo-sep">|</span>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 468.88 82.49"><defs><style>.cls-1{fill:#80ecfa}.cls-2{fill:#fcfcfc;stroke:#fcfcfc;stroke-miterlimit:10}</style></defs><g><path class="cls-2" d="M232.35,56.51l-.96,2.76h-20.55l-.96-2.76h22.46ZM240.31,30.19c-1.86,0-3.36,1.5-3.36,3.36,0,.61.17,1.19.45,1.69l-9.09,5.11-5.59-10.28c1.05-.57,1.76-1.68,1.76-2.95,0-1.86-1.5-3.36-3.36-3.36s-3.36,1.5-3.36,3.36c0,1.27.71,2.38,1.76,2.95l-5.59,10.28-9.07-5.09c.27-.49.43-1.05.43-1.65,0-1.86-1.5-3.36-3.36-3.36s-3.36,1.5-3.36,3.36,1.5,3.36,3.36,3.36c.39,0,.76-.07,1.1-.19l6.09,17.53h24l6.1-17.57c.34.12.71.18,1.09.18,1.86,0,3.36-1.5,3.36-3.36s-1.5-3.36-3.36-3.36Z"/></g><g><g><path class="cls-1" d="M282.46,58.15V18.05c-5.2,0-13.16.78-16.93,2.23l-2.35,1,1.73-19.72h52.13l1.84,19.72-2.35-1c-3.67-1.56-11.83-2.23-17.03-2.23v40.11c0,5.12.51,15.26,2.14,19.72l.82,2h-22.75l.71-2c.41-1.11.71-2.56,1.02-4.23.82-5.01,1.02-11.7,1.02-15.49Z"/><path class="cls-1" d="M378.25,58.15v-9.14h-25.21v9.14c0,5.12.49,15.26,2.07,19.72l.79,2h-21.96l.79-2c1.58-4.35,1.87-14.71,1.87-19.72V23.39c0-5.12-.3-15.49-1.87-19.83l-.79-2h21.96l-.79,2c-1.58,4.46-2.07,14.71-2.07,19.83v9.02h25.21v-9.02c0-5.12-.39-15.37-1.97-19.83l-.79-2h21.86l-.69,2c-1.58,4.46-1.97,14.71-1.97,19.83v34.76c0,5.01.39,15.26,1.97,19.72l.79,2h-21.96l.79-2c.39-1.11.69-2.56.98-4.23.79-5.01.98-11.7.98-15.49Z"/><path class="cls-1" d="M444.03,81.44c-25.35,0-35.45-18.05-35.45-40.77S420.81,0,444.84,0c4.75,0,8.89.78,13.23,2.12.81.33,1.72.45,2.83.45.81,0,1.82,0,2.52-.33l2.02-.89v26.63l-2.63-3.12c-4.04-5.01-11.61-8.24-17.98-8.24-13.33,0-18.68,11.59-18.68,24.06,0,13.37,5.35,24.17,19.29,24.17,7.07,0,15.96-3.45,20.81-8.47l2.63-2.67v21.61l-.71.33c-1.72,1-3.54,1.78-5.56,2.56-6.16,2.23-13.03,3.23-18.58,3.23Z"/></g><g><path class="cls-1" d="M50.56,2.72l-3.15,2.58c-7.75,6.4-15.62,15.05-21.01,23.71,2.13-.67,4.38-1.01,6.74-1.01,16.18,0,25.28,12.36,25.28,25.84,0,15.39-10.79,28.65-29.1,28.65S0,69.35,0,53.84C0,35.87,11.68,15.53,24.6,3.17l.45-.45h25.5ZM39.66,54.63c0-6.85-2.81-11.91-10.34-11.91s-10.56,5.06-10.56,11.91,2.92,11.91,10.56,11.91c3.71,0,6.4-1.12,7.98-3.37,1.57-2.25,2.36-5.06,2.36-8.54Z"/><path class="cls-1" d="M73.18,18.79l7.42-16.07h18.2v57.07c0,5.17.56,15.39,2.36,19.89l.9,2.02h-25.05l.9-2.02c1.8-4.38,2.13-14.83,2.13-19.89V20.7l-6.85-1.91Z"/><path class="cls-1" d="M134.69,59.35l17.08-40h-8.88c-5.28,0-15.84.45-20.34,2.25l-2.58,1.12,1.91-20h54.15v8.65q-.11.11-.11.22l-20.9,48.87c-2.02,4.61-6.4,15.17-6.4,20v1.46h-26.96l2.13-2.47c1.01-1.24,2.13-2.7,3.15-4.38,2.92-4.83,5.73-11.24,7.75-15.73Z"/></g></g></svg>
+  </div>
 </div>
 <div class="mobile-nav" id="mobileNav">
   <button class="mnav-btn on" id="mnav-data" onclick="setMobileView('data')">Dashboard</button>
@@ -248,6 +264,7 @@ body{background:#0a0a0a;color:#f0e8d8;font-family:'Courier New',monospace;height
       </div>
     </div>
   </div>
+  <div class="divider" id="divider"></div>
   <div class="right">
     <div class="chat-hd" style="display:flex;justify-content:space-between;align-items:center">
       <span>Ask anything about your store</span>
@@ -273,6 +290,48 @@ body{background:#0a0a0a;color:#f0e8d8;font-family:'Courier New',monospace;height
     <div class="modal-body" id="modalBody"></div>
   </div>
 </div>
+<div class="modal-overlay" id="loyaltyModal" onclick="if(event.target===this)this.classList.remove('open')">
+  <div class="modal-box">
+    <div class="modal-hd">
+      <span class="modal-title">Top 50 Loyalty Members</span>
+      <button class="modal-close" onclick="document.getElementById('loyaltyModal').classList.remove('open')">&times;</button>
+    </div>
+    <div class="modal-body" id="loyaltyModalBody"></div>
+  </div>
+</div>
 <script type="module" src="js/app.js"></script>
+<script>
+// Draggable panel divider — persists width to localStorage
+(function() {
+  var div = document.getElementById('divider');
+  var left = document.querySelector('.left');
+  if (!div || !left) return;
+  // Restore saved width
+  var saved = localStorage.getItem('panelWidth');
+  if (saved) left.style.width = saved + 'px';
+
+  var dragging = false;
+  div.addEventListener('mousedown', function(e) {
+    e.preventDefault();
+    dragging = true;
+    div.classList.add('active');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  });
+  document.addEventListener('mousemove', function(e) {
+    if (!dragging) return;
+    var w = Math.max(340, Math.min(window.innerWidth * 0.5, e.clientX));
+    left.style.width = w + 'px';
+  });
+  document.addEventListener('mouseup', function() {
+    if (!dragging) return;
+    dragging = false;
+    div.classList.remove('active');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    localStorage.setItem('panelWidth', parseInt(left.style.width));
+  });
+})();
+</script>
 </body>
 </html>

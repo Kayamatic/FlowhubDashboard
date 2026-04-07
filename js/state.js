@@ -41,7 +41,11 @@ export function loadCache() {
 
 export function saveCache(sd) {
   var todayEST = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-  try { localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), date: todayEST, sd: sd })); } catch(e) {}
+  try {
+    var clone = Object.assign({}, sd);
+    delete clone._customers;
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), date: todayEST, sd: clone }));
+  } catch(e) {}
 }
 
 export function setPreset(p) {
@@ -82,15 +86,51 @@ export async function fetchRange(startISO, endISO, label) {
   }
   document.getElementById('panel').innerHTML = '<div class="card"><div class="clabel">Loading ' + esc(label) + '\u2026</div><div class="cval muted loading-pulse" style="font-size:18px">Fetching orders<span class="ldots"></span></div></div>';
   try {
-    var apiStart = startISO.slice(0, 10);
+    var s0 = new Date(startISO), s1 = new Date(endISO);
+    var spanMs = s1.getTime() - s0.getTime();
+    var spanH = spanMs / 3600000;
+    // Baseline strategy:
+    //  <25h (intraday or single day) → avg of 4 prior same-weekdays (pace-adj if intraday)
+    //  else (multi-day)              → abutting preceding window of equal length
+    var useSameWeekday = spanH < 25;
+    var fetchStartDateObj;
+    if (useSameWeekday) {
+      fetchStartDateObj = new Date(s0.getTime() - 4 * 7 * 86400000);
+    } else {
+      fetchStartDateObj = new Date(s0.getTime() - spanMs);
+    }
+    var apiStart = localDateStr(fetchStartDateObj);
     var apiEnd   = endISO.slice(0, 10);
     var r = await fetch('/api/orders?start_date=' + apiStart + '&end_date=' + apiEnd);
     var raw = await r.json();
-    var orders = (raw.orders || (Array.isArray(raw) ? raw : [])).filter(function(o) { return o.orderStatus === 'sold' && !o.voided; });
-    var s0 = new Date(startISO), s1 = new Date(endISO);
-    orders = orders.filter(function(o) { if (!o.completedOn) return false; var d = new Date(o.completedOn); return d >= s0 && d <= s1; });
-    var rev = orders.reduce(function(a, o) { if (!o.totals) return a; return a + (o.totals.subTotal || 0) - (o.totals.totalDiscounts || 0); }, 0);
+    var allOrders = (raw.orders || (Array.isArray(raw) ? raw : [])).filter(function(o) { return o.orderStatus === 'sold' && !o.voided && o.completedOn; });
+    function oRevX(o) { return o.totals ? (o.totals.subTotal || 0) - (o.totals.totalDiscounts || 0) : 0; }
+    var orders = allOrders.filter(function(o) { var d = new Date(o.completedOn); return d >= s0 && d <= s1; });
+    var rev = orders.reduce(function(a, o) { return a + oRevX(o); }, 0);
     var cnt = orders.length, avg = cnt ? rev / cnt : 0;
+    var prevRev, prevAvg, blLabelDyn;
+    if (useSameWeekday) {
+      // Average 4 prior same-weekdays; each window = [s0-k*7d, s1-k*7d]
+      var sumRev = 0, sumTx = 0;
+      for (var k = 1; k <= 4; k++) {
+        var ws = new Date(s0.getTime() - k * 7 * 86400000);
+        var we = new Date(s1.getTime() - k * 7 * 86400000);
+        var wo = allOrders.filter(function(o) { var d = new Date(o.completedOn); return d >= ws && d <= we; });
+        sumRev += wo.reduce(function(a, o) { return a + oRevX(o); }, 0);
+        sumTx  += wo.length;
+      }
+      prevRev = sumRev / 4;
+      prevAvg = sumTx ? sumRev / sumTx : 0;
+      blLabelDyn = spanH < 23 ? 'same weekday avg (4-wk, pace-adj)' : 'same weekday avg (4-wk)';
+    } else {
+      var prevStart = new Date(s0.getTime() - spanMs);
+      var prevEnd   = new Date(s0.getTime());
+      var prevOrders = allOrders.filter(function(o) { var d = new Date(o.completedOn); return d >= prevStart && d < prevEnd; });
+      prevRev = prevOrders.reduce(function(a, o) { return a + oRevX(o); }, 0);
+      var prevCnt = prevOrders.length;
+      prevAvg = prevCnt ? prevRev / prevCnt : 0;
+      blLabelDyn = 'preceding ' + Math.round(spanH / 24) + ' days';
+    }
     var spanDays = (s1 - s0) / 86400000;
     var chart;
     if (spanDays <= 2) {
@@ -105,7 +145,7 @@ export async function fetchRange(startISO, endISO, label) {
     var pm = {};
     orders.forEach(function(o) { (o.itemsInCart||[]).forEach(function(i) { var n = i.productName||'Unknown'; if (!pm[n]) pm[n] = {rev:0,units:0}; pm[n].rev += (i.totalPrice||0); pm[n].units += (i.quantity||1); }); });
     var top = Object.keys(pm).map(function(k) { return { name:k, rev:Math.round(pm[k].rev), units:pm[k].units }; }).sort(function(a,b) { return b.rev-a.rev; }).slice(0,20);
-    state.SD = Object.assign({}, state.defaultSD, { rangeRev:+rev.toFixed(2), rangeCount:cnt, rangeAvg:+avg.toFixed(2), rangeChart:chart, rangeTopProducts:top, rangeLabel:label });
+    state.SD = Object.assign({}, state.defaultSD, { rangeRev:+rev.toFixed(2), rangeCount:cnt, rangeAvg:+avg.toFixed(2), rangeChart:chart, rangeTopProducts:top, rangeLabel:label, blRangeRev:+prevRev.toFixed(2), blRangeAvg:+prevAvg.toFixed(2), blRangeLabel: blLabelDyn });
     renderPanel();
   } catch(e) {
     document.getElementById('panel').innerHTML = '<div class="card r"><div class="clabel">Error</div><div class="cval muted" style="font-size:16px">' + esc(e.message) + '</div></div>';
@@ -130,6 +170,11 @@ function buildRollingSD(periodDays, nPeriods, label) {
       var mainOrders = allOrders.filter(function(o) { return new Date(o.completedOn) >= mainBound; });
       var rev = mainOrders.reduce(function(a, o) { return a + oRev(o); }, 0);
       var cnt = mainOrders.length, avg = cnt ? rev / cnt : 0;
+      var prevBoundMs = mainBound.getTime() - periodDays * 86400000;
+      var prevMainOrders = allOrders.filter(function(o) { var t = new Date(o.completedOn).getTime(); return t >= prevBoundMs && t < mainBound.getTime(); });
+      var prevRev = prevMainOrders.reduce(function(a, o) { return a + oRev(o); }, 0);
+      var prevCnt = prevMainOrders.length;
+      var prevAvg = prevCnt ? prevRev / prevCnt : 0;
       var dm = {}, dc = {};
       mainOrders.forEach(function(o) { var d = new Date(o.completedOn).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); dm[d] = (dm[d]||0) + oRev(o); dc[d] = (dc[d]||0) + 1; });
       var pm = {};
@@ -147,7 +192,7 @@ function buildRollingSD(periodDays, nPeriods, label) {
         var eLbl = new Date(pEndMs - 86400000).toLocaleDateString('en-US', opts);
         rollingChart.push({ shortLbl: sLbl, tipLabel: sLbl + '\u2013' + eLbl + ':  ' + fmtMoney(pRev) + (pOrders.length ? ' \u00b7 ' + pOrders.length + ' txns' : ''), rev: +pRev.toFixed(2) });
       }
-      return { rangeRev: +rev.toFixed(2), rangeCount: cnt, rangeAvg: +avg.toFixed(2), rangeChart: { type: 'daily', data: dm, countData: dc }, rangeTopProducts: top, rangeLabel: label, rollingChart: rollingChart, rollingPeriodDays: periodDays };
+      return { rangeRev: +rev.toFixed(2), rangeCount: cnt, rangeAvg: +avg.toFixed(2), rangeChart: { type: 'daily', data: dm, countData: dc }, rangeTopProducts: top, rangeLabel: label, rollingChart: rollingChart, rollingPeriodDays: periodDays, blRangeRev: +prevRev.toFixed(2), blRangeAvg: +prevAvg.toFixed(2), blRangeLabel: 'preceding ' + periodDays + ' days' };
     });
 }
 
@@ -220,7 +265,12 @@ export async function init() {
     var lastWeekStartStr = localDateStr(new Date(new Date(weekStartStr + 'T12:00:00Z').getTime() - 7 * 86400000));
     var lastMonthEndStr   = localDateStr(new Date(new Date(monthStartStr + 'T12:00:00Z').getTime() - 86400000));
     var lastMonthStartStr = lastMonthEndStr.slice(0, 8) + '01';
-    var mo = [weekStartStr, monthStartStr, thirtyDaysAgo, lastMonthStartStr].sort()[0];
+    var weekBeforeLastEndStr   = localDateStr(new Date(new Date(lastWeekStartStr + 'T12:00:00Z').getTime() - 86400000));
+    var weekBeforeLastStartStr = localDateStr(new Date(new Date(lastWeekStartStr + 'T12:00:00Z').getTime() - 7 * 86400000));
+    var monthBeforeLastEndStr   = localDateStr(new Date(new Date(lastMonthStartStr + 'T12:00:00Z').getTime() - 86400000));
+    var monthBeforeLastStartStr = monthBeforeLastEndStr.slice(0, 8) + '01';
+    var fourWeeksBackStr = localDateStr(new Date(now.getTime() - 29 * 86400000));
+    var mo = [weekStartStr, monthStartStr, thirtyDaysAgo, lastMonthStartStr, monthBeforeLastStartStr, weekBeforeLastStartStr, fourWeeksBackStr].sort()[0];
 
     var ordersP    = fetch('/api/orders?start_date=' + mo + '&end_date=' + today).then(function(r) { return r.json(); });
     var inventoryP = fetch('/api/inventory').then(function(r) { return r.json(); });
@@ -324,7 +374,8 @@ export async function init() {
       churnRisk: customers.filter(function(c) { var l = new Date(c.updatedAt || 0); return l < t60 && l.getFullYear() > 2000; }).length,
       newCustomersPerDay7:  +(nc7  / 7).toFixed(1),
       newCustomersPerDay30: +(nc30 / 30).toFixed(1),
-      loyaltyGrowth: lgData
+      loyaltyGrowth: lgData,
+      _customers: customers
     });
 
     var _mode2 = state.isDemo ? 'demo' : 'live';
@@ -359,6 +410,70 @@ export async function init() {
     var lastMonthEndBound   = new Date(estToISO(lastMonthEndStr,   '23:59:59'));
     var lwO  = orders.filter(function(o) { return o.completedOn && new Date(o.completedOn) >= lastWeekStartBound  && new Date(o.completedOn) <= lastWeekEndBound; });
     var lmO  = orders.filter(function(o) { return o.completedOn && new Date(o.completedOn) >= lastMonthStartBound && new Date(o.completedOn) <= lastMonthEndBound; });
+
+    // ---- Color baselines for sales cards ----
+    function msSinceMidnightEst(d) {
+      var s = new Date(d).toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      var p = s.split(':').map(Number);
+      return ((p[0] * 3600) + (p[1] * 60) + p[2]) * 1000;
+    }
+    function estDateOf(d) { return new Date(d).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); }
+    var nowMsToday = msSinceMidnightEst(now);
+
+    // Today: avg of last 4 same-weekdays, partial up to current time-of-day
+    var tBl = [];
+    for (var k = 1; k <= 4; k++) {
+      var ds = estDateOf(new Date(now.getTime() - k * 7 * 86400000));
+      var s = 0;
+      orders.forEach(function(o) {
+        if (!o.completedOn || estDateOf(o.completedOn) !== ds) return;
+        if (msSinceMidnightEst(o.completedOn) <= nowMsToday) s += oTotal(o);
+      });
+      tBl.push(s);
+    }
+    var blToday = tBl.reduce(function(a,b){return a+b;},0) / 4;
+
+    // Yesterday: avg of 4 same-weekdays prior to yesterday (full days)
+    var yBl = [];
+    for (var k = 1; k <= 4; k++) {
+      var ds = estDateOf(new Date(now.getTime() - 86400000 - k * 7 * 86400000));
+      var s = 0;
+      orders.forEach(function(o) { if (o.completedOn && estDateOf(o.completedOn) === ds) s += oTotal(o); });
+      yBl.push(s);
+    }
+    var blYesterday = yBl.reduce(function(a,b){return a+b;},0) / 4;
+
+    // This Week: last week's revenue through equivalent elapsed point
+    var weekElapsedMs = now.getTime() - weekStartBound.getTime();
+    var lwCutoff = lastWeekStartBound.getTime() + weekElapsedMs;
+    var blWeek = 0;
+    orders.forEach(function(o) {
+      if (!o.completedOn) return;
+      var t = new Date(o.completedOn).getTime();
+      if (t >= lastWeekStartBound.getTime() && t <= lwCutoff) blWeek += oTotal(o);
+    });
+
+    // This Month: last month through same day-of-month and time-of-day
+    var todayDom = parseInt(nowESTDate.slice(8, 10));
+    var blMonth = 0;
+    orders.forEach(function(o) {
+      if (!o.completedOn) return;
+      var ds = estDateOf(o.completedOn);
+      if (ds < lastMonthStartStr || ds > lastMonthEndStr) return;
+      var dom = parseInt(ds.slice(8, 10));
+      if (dom < todayDom) { blMonth += oTotal(o); return; }
+      if (dom === todayDom && msSinceMidnightEst(o.completedOn) <= nowMsToday) blMonth += oTotal(o);
+    });
+
+    // Last Week: week before last
+    var weekBeforeLastStartBound = new Date(estToISO(weekBeforeLastStartStr, '00:00:00'));
+    var weekBeforeLastEndBound   = new Date(estToISO(weekBeforeLastEndStr,   '23:59:59'));
+    var blLastWeek = orders.filter(function(o) { return o.completedOn && new Date(o.completedOn) >= weekBeforeLastStartBound && new Date(o.completedOn) <= weekBeforeLastEndBound; }).reduce(function(s,o){return s+oTotal(o);},0);
+
+    // Last Month: month before last
+    var monthBeforeLastStartBound = new Date(estToISO(monthBeforeLastStartStr, '00:00:00'));
+    var monthBeforeLastEndBound   = new Date(estToISO(monthBeforeLastEndStr,   '23:59:59'));
+    var blLastMonth = orders.filter(function(o) { return o.completedOn && new Date(o.completedOn) >= monthBeforeLastStartBound && new Date(o.completedOn) <= monthBeforeLastEndBound; }).reduce(function(s,o){return s+oTotal(o);},0);
     var t7bound  = new Date(now.getTime() -  7 * 86400000);
     var t30bound = new Date(now.getTime() - 30 * 86400000);
     var d7O  = orders.filter(function(o) { return o.completedOn && new Date(o.completedOn) >= t7bound;  });
@@ -441,7 +556,13 @@ export async function init() {
       topProductsWeek: topWeek,
       fastestDepleting7d: dep7d,
       fastestDepleting30d: dep30d,
-      newVsReturning: newVsReturning
+      newVsReturning: newVsReturning,
+      blToday: +blToday.toFixed(2),
+      blYesterday: +blYesterday.toFixed(2),
+      blWeek: +blWeek.toFixed(2),
+      blMonth: +blMonth.toFixed(2),
+      blLastWeek: +blLastWeek.toFixed(2),
+      blLastMonth: +blLastMonth.toFixed(2)
     });
     state.defaultSD = Object.assign({}, state.SD);
     saveCache(state.SD);

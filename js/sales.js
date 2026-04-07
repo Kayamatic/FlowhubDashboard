@@ -1,7 +1,7 @@
 import { esc, fmtMoney, fmtFull, shortName, hrLbl, barMaxH, barWrapH, mkLineSvg } from './utils.js';
 import { state } from './state.js';
 import { renderInventoryHTML } from './inventory.js';
-import { renderCustomersHTML } from './customers.js';
+import { renderCustomersHTML, initLoyaltyLookup } from './customers.js';
 
 export function setTab(t) {
   state.currentTab = t;
@@ -23,6 +23,15 @@ export function renderPanel() {
     h = renderCustomersHTML();
   }
   document.getElementById('panel').innerHTML = h;
+  if (state.currentTab === 'customers') { initLoyaltyLookup(); }
+}
+
+function colorBl(actual, baseline, label) {
+  if (!baseline || baseline <= 0) return { cls: '', tip: 'No baseline yet (' + label + ')' };
+  var d = (actual - baseline) / baseline;
+  var cls = d > 0.05 ? ' g' : (d < -0.05 ? ' r' : '');
+  var sign = d >= 0 ? '+' : '';
+  return { cls: cls, tip: sign + (d * 100).toFixed(0) + '% vs ' + label + ' ($' + Math.round(baseline).toLocaleString() + ')' };
 }
 
 function renderSalesHTML() {
@@ -33,8 +42,11 @@ function renderSalesHTML() {
   } else if (state.activePreset !== 'default' && SD.rangeRev !== undefined) {
     var rl = esc(SD.rangeLabel || 'Custom Range');
     h += '<div class="grid2">';
-    h += '<div class="card"><div class="clabel">' + rl + ' Revenue</div><div class="cval">' + fmtFull(SD.rangeRev) + '</div><div class="csub">' + SD.rangeCount + ' transactions</div></div>';
-    h += '<div class="card g"><div class="clabel">Avg Basket</div><div class="cval">$' + SD.rangeAvg.toFixed(2) + '</div><div class="csub">per visit</div></div>';
+    var blLbl = SD.blRangeLabel || 'preceding window';
+    var cRR = colorBl(SD.rangeRev, SD.blRangeRev, blLbl);
+    var cRA = colorBl(SD.rangeAvg, SD.blRangeAvg, blLbl);
+    h += '<div class="card' + cRR.cls + '" title="' + esc(cRR.tip) + '"><div class="clabel">' + rl + ' Revenue</div><div class="cval">' + fmtFull(SD.rangeRev) + '</div><div class="csub">' + SD.rangeCount + ' transactions</div></div>';
+    h += '<div class="card' + cRA.cls + '" title="' + esc(cRA.tip) + '"><div class="clabel">Avg Basket</div><div class="cval">$' + SD.rangeAvg.toFixed(2) + '</div><div class="csub">per visit</div></div>';
     h += '</div>';
     if (SD.rollingChart && SD.rollingChart.length) {
       var rc = SD.rollingChart, mxRc = Math.max.apply(null, rc.map(function(p){return p.rev;}).concat([1]));
@@ -80,12 +92,18 @@ function renderSalesHTML() {
     }
   } else {
     h += '<div class="grid2">';
-    h += '<div class="card"><div class="clabel">Today\'s Revenue</div><div class="cval">' + fmtFull(SD.todayRev) + '</div><div class="csub">' + SD.todayCount + ' transactions</div></div>';
-    h += '<div class="card g"><div class="clabel">Yesterday\'s Revenue</div><div class="cval">' + fmtFull(SD.yesterdayRev || 0) + '</div><div class="csub">' + (SD.yesterdayCount || 0) + ' transactions</div></div>';
-    h += '<div class="card"><div class="clabel">This Week</div><div class="cval">' + fmtMoney(SD.weekRev) + '</div><div class="csub">' + SD.weekCount + ' transactions</div></div>';
-    h += '<div class="card"><div class="clabel">This Month</div><div class="cval">' + fmtMoney(SD.monthRev) + '</div><div class="csub">' + SD.monthCount + ' transactions</div></div>';
-    h += '<div class="card"><div class="clabel">Last Week</div><div class="cval">' + fmtMoney(SD.lastWeekRev || 0) + '</div><div class="csub">' + (SD.lastWeekCount || 0) + ' transactions</div><div class="csub muted" style="font-size:10px;margin-top:2px">' + (SD.lastWeekLabel || '') + '</div></div>';
-    h += '<div class="card"><div class="clabel">Last Month</div><div class="cval">' + fmtMoney(SD.lastMonthRev || 0) + '</div><div class="csub">' + (SD.lastMonthCount || 0) + ' transactions</div><div class="csub muted" style="font-size:10px;margin-top:2px">' + (SD.lastMonthLabel || '') + '</div></div>';
+    var cT  = colorBl(SD.todayRev,        SD.blToday,     'same weekday avg (4-wk, pace-adj)');
+    var cY  = colorBl(SD.yesterdayRev||0, SD.blYesterday, 'same weekday avg (4-wk)');
+    var cW  = colorBl(SD.weekRev,         SD.blWeek,      'last week through same point');
+    var cM  = colorBl(SD.monthRev,        SD.blMonth,     'last month through same day');
+    var cLW = colorBl(SD.lastWeekRev||0,  SD.blLastWeek,  'week before');
+    var cLM = colorBl(SD.lastMonthRev||0, SD.blLastMonth, 'month before');
+    h += '<div class="card' + cT.cls  + '" title="' + esc(cT.tip)  + '"><div class="clabel">Today\'s Revenue</div><div class="cval">' + fmtFull(SD.todayRev) + '</div><div class="csub">' + SD.todayCount + ' transactions</div></div>';
+    h += '<div class="card' + cY.cls  + '" title="' + esc(cY.tip)  + '"><div class="clabel">Yesterday\'s Revenue</div><div class="cval">' + fmtFull(SD.yesterdayRev || 0) + '</div><div class="csub">' + (SD.yesterdayCount || 0) + ' transactions</div></div>';
+    h += '<div class="card' + cW.cls  + '" title="' + esc(cW.tip)  + '"><div class="clabel">This Week</div><div class="cval">' + fmtMoney(SD.weekRev) + '</div><div class="csub">' + SD.weekCount + ' transactions</div></div>';
+    h += '<div class="card' + cM.cls  + '" title="' + esc(cM.tip)  + '"><div class="clabel">This Month</div><div class="cval">' + fmtMoney(SD.monthRev) + '</div><div class="csub">' + SD.monthCount + ' transactions</div></div>';
+    h += '<div class="card' + cLW.cls + '" title="' + esc(cLW.tip) + '"><div class="clabel">Last Week</div><div class="cval">' + fmtMoney(SD.lastWeekRev || 0) + '</div><div class="csub">' + (SD.lastWeekCount || 0) + ' transactions</div><div class="csub muted" style="font-size:10px;margin-top:2px">' + (SD.lastWeekLabel || '') + '</div></div>';
+    h += '<div class="card' + cLM.cls + '" title="' + esc(cLM.tip) + '"><div class="clabel">Last Month</div><div class="cval">' + fmtMoney(SD.lastMonthRev || 0) + '</div><div class="csub">' + (SD.lastMonthCount || 0) + ' transactions</div><div class="csub muted" style="font-size:10px;margin-top:2px">' + (SD.lastMonthLabel || '') + '</div></div>';
     h += '</div>';
     var mx = Math.max.apply(null, SD.hourly.concat([1]));
     var mxc = SD.hourlyCount ? Math.max.apply(null, SD.hourlyCount.concat([1])) : 1;

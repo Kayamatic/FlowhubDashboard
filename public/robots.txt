@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+Disallow: /netlify/
+
+Sitemap: https://askclyde.co/sitemap.xml
