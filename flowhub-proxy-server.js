@@ -712,6 +712,154 @@ app.get("/api/customers", async(q,s) => {
   } catch(e) { s.status(500).json({error: e.message}); }
 });
 
+// ── Campaign export — rich per-customer CSV for Claude.ai campaign planning ───
+app.get("/api/campaign-export", async(q,s) => {
+  try {
+    const now = new Date();
+    const today = now.toLocaleDateString('en-CA', {timeZone: 'America/New_York'});
+    const start = '2020-01-01'; // full lifetime
+
+    const [allOrders, allCustomers] = await Promise.all([
+      fetchAllOrdersCached(start, today),
+      fetchAllCustomers()
+    ]);
+    const sold = allOrders.filter(o => o.orderStatus === 'sold' && o.completedOn);
+
+    // Precompute cutoffs
+    const ms30  = 30  * MS_PER_DAY, ms90  = 90  * MS_PER_DAY;
+    const ms365 = 365 * MS_PER_DAY, ms180 = 180 * MS_PER_DAY;
+
+    // Build per-customer order stats
+    const stats = {};
+    sold.forEach(o => {
+      const cid = o.customerId || '__guest__';
+      if (!stats[cid]) stats[cid] = {
+        orders: [], rev: 0, firstTs: Infinity, lastTs: 0,
+        dowCount: {}, hourCount: {}, catCount: {}, prodCount: {}, discounted: 0
+      };
+      const st = stats[cid];
+      const t = new Date(o.completedOn).getTime();
+      const rev = oTotal(o);
+      st.orders.push({t, rev, discounted: (o.totals && o.totals.totalDiscounts > 0)});
+      st.rev += rev;
+      if (t < st.firstTs) st.firstTs = t;
+      if (t > st.lastTs)  st.lastTs  = t;
+      if (o.totals && o.totals.totalDiscounts > 0) st.discounted++;
+      const {dow, hour} = estInfo(o.completedOn);
+      st.dowCount[dow] = (st.dowCount[dow] || 0) + 1;
+      st.hourCount[hour] = (st.hourCount[hour] || 0) + 1;
+      (o.itemsInCart || []).forEach(i => {
+        if (i.category) st.catCount[i.category] = (st.catCount[i.category] || 0) + 1;
+        if (i.productName) st.prodCount[i.productName] = (st.prodCount[i.productName] || 0) + 1;
+      });
+    });
+
+    function topKey(obj) {
+      let best = '', bv = 0;
+      Object.entries(obj).forEach(([k,v]) => { if (v > bv) { bv = v; best = k; } });
+      return best;
+    }
+    function hourBucket(h) {
+      if (h >= 9 && h < 12)  return 'morning';
+      if (h >= 12 && h < 17) return 'afternoon';
+      if (h >= 17 && h < 21) return 'evening';
+      return 'other';
+    }
+    const DAYS_FULL = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+
+    function csvEsc(v) {
+      const s = String(v == null ? '' : v);
+      return (s.includes(',') || s.includes('"') || s.includes('\n')) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    }
+
+    const headers = [
+      'email','phone','firstName','lastName',
+      'loyalty_points','is_loyal','engagement_tier','email_opt_in','sms_opt_in',
+      'customer_since','last_visit','days_since_last_visit','days_as_customer',
+      'ltv','order_count','avg_basket',
+      'visits_last_30d','visits_last_90d','visits_last_365d',
+      'rev_last_30d','rev_last_90d','rev_last_365d',
+      'avg_basket_last_90d',
+      'preferred_day_of_week','preferred_time_of_day',
+      'top_category','top_product',
+      'pct_orders_discounted',
+      'customer_type'
+    ];
+
+    const rows = allCustomers
+      .filter(c => (c.email || c.aiqEmail || c.phone || c.aiqPhone)) // contactable only
+      .map(c => {
+        const cid = c.id || c._id || c.customerId || '';
+        const st = stats[cid];
+        const name = (c.name || ((c.firstName||'') + ' ' + (c.lastName||'')).trim() || '').trim();
+        const parts = name.split(' ');
+        const firstName = c.firstName || parts[0] || '';
+        const lastName  = c.lastName  || parts.slice(1).join(' ') || '';
+        const email = c.email || c.aiqEmail || '';
+        const phone = c.phone || c.aiqPhone || '';
+
+        if (!st || st.orders.length === 0) {
+          return [email, phone, firstName, lastName,
+            c.loyaltyPoints||0, (c.isLoyal||(c.loyaltyPoints||0)>0)?'true':'false',
+            c.engagementTier||'', c.emailOptIn?'true':'false', c.smsOptIn?'true':'false',
+            c.createdAt ? new Date(c.createdAt).toLocaleDateString('en-CA',{timeZone:'America/New_York'}) : '',
+            '','','',
+            0,0,0, 0,0,0, 0,0,0, 0, '','', '','', 0,'no_orders'
+          ];
+        }
+
+        const daysSinceLast = Math.floor((now.getTime() - st.lastTs) / MS_PER_DAY);
+        const firstDate = new Date(st.firstTs).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
+        const lastDate  = new Date(st.lastTs).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
+        const daysAsCustomer = Math.floor((now.getTime() - st.firstTs) / MS_PER_DAY);
+
+        const ordCount = st.orders.length;
+        const avgBasket = ordCount ? +(st.rev / ordCount).toFixed(2) : 0;
+
+        const cut30 = now.getTime() - ms30, cut90 = now.getTime() - ms90, cut365 = now.getTime() - ms365;
+        const ords30  = st.orders.filter(o => o.t >= cut30);
+        const ords90  = st.orders.filter(o => o.t >= cut90);
+        const ords365 = st.orders.filter(o => o.t >= cut365);
+        const rev30  = +ords30.reduce((a,o)=>a+o.rev,0).toFixed(2);
+        const rev90  = +ords90.reduce((a,o)=>a+o.rev,0).toFixed(2);
+        const rev365 = +ords365.reduce((a,o)=>a+o.rev,0).toFixed(2);
+        const avgBasket90 = ords90.length ? +(rev90 / ords90.length).toFixed(2) : 0;
+
+        const prefDow  = topKey(st.dowCount);
+        const prefHour = topKey(st.hourCount);
+        const topCat  = topKey(st.catCount);
+        const topProd = topKey(st.prodCount);
+        const pctDisc = ordCount ? +(st.discounted / ordCount * 100).toFixed(1) : 0;
+
+        // Customer lifecycle type
+        let custType;
+        if (daysAsCustomer <= 90)        custType = 'new';
+        else if (daysSinceLast <= 60)    custType = 'active';
+        else if (daysSinceLast <= 120)   custType = 'lapsed';
+        else if (daysSinceLast <= 365)   custType = 'at_risk';
+        else                             custType = 'lost';
+
+        return [
+          email, phone, firstName, lastName,
+          c.loyaltyPoints||0, (c.isLoyal||(c.loyaltyPoints||0)>0)?'true':'false',
+          c.engagementTier||'', c.emailOptIn?'true':'false', c.smsOptIn?'true':'false',
+          firstDate, lastDate, daysSinceLast, daysAsCustomer,
+          +st.rev.toFixed(2), ordCount, avgBasket,
+          ords30.length, ords90.length, ords365.length,
+          rev30, rev90, rev365, avgBasket90,
+          DAYS_FULL[prefDow] || '', hourBucket(parseInt(prefHour)),
+          topCat, topProd, pctDisc, custType
+        ];
+      });
+
+    const csv = [headers.join(','), ...rows.map(r => r.map(csvEsc).join(','))].join('\r\n');
+    const filename = `diggory_campaign_export_${today}.csv`;
+    s.setHeader('Content-Type', 'text/csv');
+    s.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    s.send(csv);
+  } catch(e) { s.status(500).json({error: e.message}); }
+});
+
 // ── Analytics helpers ─────────────────────────────────────────────────────────
 
 // NY (America/New_York) calendar-day boundaries in UTC, DST-aware.
