@@ -713,26 +713,33 @@ app.get("/api/customers", async(q,s) => {
 });
 
 // ── Campaign export — rich per-customer CSV for Claude.ai campaign planning ───
+// AIQ-first: uses Alpine IQ as the base list (full opt-in universe),
+// joins Flowhub purchase history where srcID matches.
 app.get("/api/campaign-export", async(q,s) => {
   try {
     const now = new Date();
     const today = now.toLocaleDateString('en-CA', {timeZone: 'America/New_York'});
-    const start = '2020-01-01'; // full lifetime
 
-    const [allOrders, allCustomers] = await Promise.all([
-      fetchAllOrdersCached(start, today),
+    const [allOrders, aiqContacts, flowhubCustomers] = await Promise.all([
+      fetchAllOrdersCached('2020-01-01', today),
+      fetchAiqContacts(),
       fetchAllCustomers()
     ]);
     const sold = allOrders.filter(o => o.orderStatus === 'sold' && o.completedOn);
 
-    // Precompute cutoffs
-    const ms30  = 30  * MS_PER_DAY, ms90  = 90  * MS_PER_DAY;
-    const ms365 = 365 * MS_PER_DAY, ms180 = 180 * MS_PER_DAY;
+    // Flowhub customer lookup: id → customer (for createdAt and name fallback)
+    const fhLookup = new Map();
+    flowhubCustomers.forEach(c => {
+      const id = c.id || c._id || c.customerId;
+      if (id) fhLookup.set(id, c);
+    });
 
-    // Build per-customer order stats
+    // Per-customer order stats keyed by Flowhub customer ID
+    const ms30 = 30 * MS_PER_DAY, ms90 = 90 * MS_PER_DAY, ms365 = 365 * MS_PER_DAY;
     const stats = {};
     sold.forEach(o => {
-      const cid = o.customerId || '__guest__';
+      const cid = o.customerId;
+      if (!cid) return;
       if (!stats[cid]) stats[cid] = {
         orders: [], rev: 0, firstTs: Infinity, lastTs: 0,
         dowCount: {}, hourCount: {}, catCount: {}, prodCount: {}, discounted: 0
@@ -740,7 +747,7 @@ app.get("/api/campaign-export", async(q,s) => {
       const st = stats[cid];
       const t = new Date(o.completedOn).getTime();
       const rev = oTotal(o);
-      st.orders.push({t, rev, discounted: (o.totals && o.totals.totalDiscounts > 0)});
+      st.orders.push({t, rev});
       st.rev += rev;
       if (t < st.firstTs) st.firstTs = t;
       if (t > st.lastTs)  st.lastTs  = t;
@@ -749,7 +756,7 @@ app.get("/api/campaign-export", async(q,s) => {
       st.dowCount[dow] = (st.dowCount[dow] || 0) + 1;
       st.hourCount[hour] = (st.hourCount[hour] || 0) + 1;
       (o.itemsInCart || []).forEach(i => {
-        if (i.category) st.catCount[i.category] = (st.catCount[i.category] || 0) + 1;
+        if (i.category)    st.catCount[i.category]    = (st.catCount[i.category]    || 0) + 1;
         if (i.productName) st.prodCount[i.productName] = (st.prodCount[i.productName] || 0) + 1;
       });
     });
@@ -760,7 +767,7 @@ app.get("/api/campaign-export", async(q,s) => {
       return best;
     }
     function hourBucket(h) {
-      if (h >= 9 && h < 12)  return 'morning';
+      if (h >= 9  && h < 12) return 'morning';
       if (h >= 12 && h < 17) return 'afternoon';
       if (h >= 17 && h < 21) return 'evening';
       return 'other';
@@ -786,69 +793,76 @@ app.get("/api/campaign-export", async(q,s) => {
       'customer_type'
     ];
 
-    const rows = allCustomers
-      .filter(c => (c.email || c.aiqEmail || c.phone || c.aiqPhone)) // contactable only
-      .map(c => {
-        const cid = c.id || c._id || c.customerId || '';
-        const st = stats[cid];
-        const name = (c.name || ((c.firstName||'') + ' ' + (c.lastName||'')).trim() || '').trim();
-        const parts = name.split(' ');
-        const firstName = c.firstName || parts[0] || '';
-        const lastName  = c.lastName  || parts.slice(1).join(' ') || '';
-        const email = c.email || c.aiqEmail || '';
-        const phone = c.phone || c.aiqPhone || '';
+    // AIQ-first: every AIQ contact with a phone or email gets a row
+    const rows = aiqContacts
+      .filter(aiq => aiq.mobilePhone || aiq.email)
+      .map(aiq => {
+        const email    = aiq.email || '';
+        const phone    = aiq.mobilePhone || '';
+        const firstName = aiq.firstName || (aiq.name || '').split(' ')[0] || '';
+        const lastName  = aiq.lastName  || (aiq.name || '').split(' ').slice(1).join(' ') || '';
+        const loyaltyPoints = aiq.loyaltyPoints || 0;
+        const isLoyal   = !!(aiq.loyalty);
+        const tier      = aiq.leakyBucket || '';
+        const emailOptIn = !!(aiq.emailOptInTime);
+        const smsOptIn   = !!(aiq.optinTime || aiq.smsconsent);
 
+        // Join Flowhub data via srcID
+        const cid = aiq.srcID || '';
+        const fh  = cid ? fhLookup.get(cid) : null;
+        const customerSince = fh && fh.createdAt
+          ? new Date(fh.createdAt).toLocaleDateString('en-CA',{timeZone:'America/New_York'})
+          : '';
+
+        const st = cid ? stats[cid] : null;
         if (!st || st.orders.length === 0) {
           return [email, phone, firstName, lastName,
-            c.loyaltyPoints||0, (c.isLoyal||(c.loyaltyPoints||0)>0)?'true':'false',
-            c.engagementTier||'', c.emailOptIn?'true':'false', c.smsOptIn?'true':'false',
-            c.createdAt ? new Date(c.createdAt).toLocaleDateString('en-CA',{timeZone:'America/New_York'}) : '',
-            '','','',
-            0,0,0, 0,0,0, 0,0,0, 0, '','', '','', 0,'no_orders'
+            loyaltyPoints, isLoyal?'true':'false', tier,
+            emailOptIn?'true':'false', smsOptIn?'true':'false',
+            customerSince, '', '', '',
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, '', '', '', '', 0,
+            'no_orders'
           ];
         }
 
-        const daysSinceLast = Math.floor((now.getTime() - st.lastTs) / MS_PER_DAY);
+        const daysSinceLast  = Math.floor((now.getTime() - st.lastTs) / MS_PER_DAY);
+        const daysAsCustomer = Math.floor((now.getTime() - st.firstTs) / MS_PER_DAY);
         const firstDate = new Date(st.firstTs).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
         const lastDate  = new Date(st.lastTs).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
-        const daysAsCustomer = Math.floor((now.getTime() - st.firstTs) / MS_PER_DAY);
+        const ordCount  = st.orders.length;
+        const avgBasket = +(st.rev / ordCount).toFixed(2);
 
-        const ordCount = st.orders.length;
-        const avgBasket = ordCount ? +(st.rev / ordCount).toFixed(2) : 0;
-
-        const cut30 = now.getTime() - ms30, cut90 = now.getTime() - ms90, cut365 = now.getTime() - ms365;
-        const ords30  = st.orders.filter(o => o.t >= cut30);
-        const ords90  = st.orders.filter(o => o.t >= cut90);
-        const ords365 = st.orders.filter(o => o.t >= cut365);
+        const cut30 = now.getTime()-ms30, cut90 = now.getTime()-ms90, cut365 = now.getTime()-ms365;
+        const ords30  = st.orders.filter(o=>o.t>=cut30);
+        const ords90  = st.orders.filter(o=>o.t>=cut90);
+        const ords365 = st.orders.filter(o=>o.t>=cut365);
         const rev30  = +ords30.reduce((a,o)=>a+o.rev,0).toFixed(2);
         const rev90  = +ords90.reduce((a,o)=>a+o.rev,0).toFixed(2);
         const rev365 = +ords365.reduce((a,o)=>a+o.rev,0).toFixed(2);
-        const avgBasket90 = ords90.length ? +(rev90 / ords90.length).toFixed(2) : 0;
+        const avgBasket90 = ords90.length ? +(rev90/ords90.length).toFixed(2) : 0;
 
-        const prefDow  = topKey(st.dowCount);
-        const prefHour = topKey(st.hourCount);
         const topCat  = topKey(st.catCount);
         const topProd = topKey(st.prodCount);
-        const pctDisc = ordCount ? +(st.discounted / ordCount * 100).toFixed(1) : 0;
+        const pctDisc = +(st.discounted / ordCount * 100).toFixed(1);
+        const prefDow  = DAYS_FULL[topKey(st.dowCount)] || '';
+        const prefHour = hourBucket(parseInt(topKey(st.hourCount)));
 
-        // Customer lifecycle type
         let custType;
-        if (daysAsCustomer <= 90)        custType = 'new';
-        else if (daysSinceLast <= 60)    custType = 'active';
-        else if (daysSinceLast <= 120)   custType = 'lapsed';
-        else if (daysSinceLast <= 365)   custType = 'at_risk';
-        else                             custType = 'lost';
+        if (daysAsCustomer <= 90)      custType = 'new';
+        else if (daysSinceLast <= 60)  custType = 'active';
+        else if (daysSinceLast <= 120) custType = 'lapsed';
+        else if (daysSinceLast <= 365) custType = 'at_risk';
+        else                           custType = 'lost';
 
         return [
           email, phone, firstName, lastName,
-          c.loyaltyPoints||0, (c.isLoyal||(c.loyaltyPoints||0)>0)?'true':'false',
-          c.engagementTier||'', c.emailOptIn?'true':'false', c.smsOptIn?'true':'false',
-          firstDate, lastDate, daysSinceLast, daysAsCustomer,
+          loyaltyPoints, isLoyal?'true':'false', tier,
+          emailOptIn?'true':'false', smsOptIn?'true':'false',
+          customerSince || firstDate, lastDate, daysSinceLast, daysAsCustomer,
           +st.rev.toFixed(2), ordCount, avgBasket,
           ords30.length, ords90.length, ords365.length,
           rev30, rev90, rev365, avgBasket90,
-          DAYS_FULL[prefDow] || '', hourBucket(parseInt(prefHour)),
-          topCat, topProd, pctDisc, custType
+          prefDow, prefHour, topCat, topProd, pctDisc, custType
         ];
       });
 
