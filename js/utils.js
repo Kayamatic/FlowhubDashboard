@@ -28,11 +28,13 @@ export function showBarTip(e, t) {
   tip.textContent = t;
   tip.style.display = 'block';
   var tw = tip.offsetWidth, th = tip.offsetHeight;
-  var x = e.clientX - tw / 2;
+  var cx = e.touches ? e.touches[0].clientX : e.clientX;
+  var cy = e.touches ? e.touches[0].clientY : e.clientY;
+  var x = cx - tw / 2;
   if (x < 4) x = 4;
   if (x + tw > window.innerWidth - 4) x = window.innerWidth - tw - 4;
   tip.style.left = x + 'px';
-  tip.style.top = (e.clientY - th - 10) + 'px';
+  tip.style.top = (cy - th - 10) + 'px';
 }
 export function hideBarTip() { document.getElementById('barTip').style.display = 'none'; }
 export function barMaxH(n) { return n <= 12 ? 65 : 52; }
