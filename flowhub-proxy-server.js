@@ -712,6 +712,46 @@ app.get("/api/customers", async(q,s) => {
   } catch(e) { s.status(500).json({error: e.message}); }
 });
 
+// ── Customer stats — lightweight aggregate for initial dashboard load ─────────
+app.get("/api/customer-stats", async(q,s) => {
+  try {
+    const now = new Date();
+    const customers = await fetchAllCustomers();
+    const t7   = new Date(now.getTime() -  7 * MS_PER_DAY);
+    const t30  = new Date(now.getTime() - 30 * MS_PER_DAY);
+    const t60  = new Date(now.getTime() - 60 * MS_PER_DAY);
+    const todayEST = now.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    const weekStart = new Date(now.getTime() - now.getDay() * MS_PER_DAY).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    const weekStartBound = new Date(weekStart + 'T00:00:00');
+    const monthStart = todayEST.slice(0, 8) + '01';
+    const monthStartBound = new Date(monthStart + 'T00:00:00');
+
+    const loyal = customers.filter(c => c.isLoyal || (c.loyaltyPoints || 0) > 0);
+    const loyalDates = loyal.map(c => c.createdAt
+      ? new Date(c.createdAt).toLocaleDateString('en-CA', { timeZone: 'America/New_York' })
+      : '2000-01-01').sort();
+    function lgBisect(arr, val) { let lo=0,hi=arr.length; while(lo<hi){const m=lo+hi>>1; if(arr[m]<=val)lo=m+1; else hi=m;} return lo; }
+    const loyaltyGrowth = [];
+    for (let di = 29; di >= 0; di--) {
+      const d = new Date(now.getTime() - di * MS_PER_DAY);
+      const ds = d.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+      loyaltyGrowth.push({ date: ds, count: lgBisect(loyalDates, ds) });
+    }
+
+    s.json({
+      total: customers.length,
+      newToday:   customers.filter(c => c.createdAt && new Date(c.createdAt).toLocaleDateString('en-CA',{timeZone:'America/New_York'}) === todayEST).length,
+      newWeek:    customers.filter(c => new Date(c.createdAt||0) >= weekStartBound).length,
+      newMonth:   customers.filter(c => new Date(c.createdAt||0) >= monthStartBound).length,
+      newLast7:   customers.filter(c => new Date(c.createdAt||0) >= t7).length,
+      newLast30:  customers.filter(c => new Date(c.createdAt||0) >= t30).length,
+      loyal:      loyal.length,
+      churnRisk:  customers.filter(c => { const l = new Date(c.updatedAt||0); return l < t60 && l.getFullYear() > 2000; }).length,
+      loyaltyGrowth
+    });
+  } catch(e) { s.status(500).json({error: e.message}); }
+});
+
 // ── Campaign export — rich per-customer CSV for Claude.ai campaign planning ───
 // AIQ-first: uses Alpine IQ as the base list (full opt-in universe),
 // joins Flowhub purchase history where srcID matches.

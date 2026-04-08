@@ -274,12 +274,11 @@ export async function init() {
 
     var ordersP    = fetch('/api/orders?start_date=' + mo + '&end_date=' + today).then(function(r) { return r.json(); });
     var inventoryP = fetch('/api/inventory').then(function(r) { return r.json(); });
-    var customersP = fetch('/api/customers').then(function(r) { return r.json(); });
+    var custStatsP = fetch('/api/customer-stats').then(function(r) { return r.json(); });
 
     var rawP = await inventoryP;
-    var rawC = await customersP;
+    var custStats = await custStatsP;
     var products  = rawP.data || (Array.isArray(rawP) ? rawP : []);
-    var customers = rawC.data || (Array.isArray(rawC) ? rawC : []);
 
     var _nameMap = {};
     products.forEach(function(p) {
@@ -337,20 +336,6 @@ export async function init() {
     var monthStartBound = new Date(estToISO(monthStartStr, '00:00:00'));
     var t60 = new Date(now - 60 * 86400000);
 
-    var nc7  = customers.filter(function(c) { return new Date(c.createdAt || 0) >= new Date(now.getTime() -  7 * 86400000); }).length;
-    var nc30 = customers.filter(function(c) { return new Date(c.createdAt || 0) >= new Date(now.getTime() - 30 * 86400000); }).length;
-    var loyalAll = customers.filter(function(c) { return c.isLoyal || c.loyaltyPoints > 0; });
-    var loyalDates = loyalAll.map(function(c) {
-      return c.createdAt ? new Date(c.createdAt).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) : '2000-01-01';
-    }).sort();
-    function lgBisect(arr, val) { var lo=0,hi=arr.length; while(lo<hi){var m=lo+hi>>1; if(arr[m]<=val)lo=m+1; else hi=m;} return lo; }
-    var lgData = [];
-    for (var di = 29; di >= 0; di--) {
-      var lgDay  = new Date(now.getTime() - di * 86400000);
-      var lgDate = lgDay.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-      lgData.push({ date: lgDate, count: lgBisect(loyalDates, lgDate) });
-    }
-
     state.SD = Object.assign(state.SD || {}, {
       salesReady: false,
       todayRev: 0, todayCount: 0,
@@ -366,16 +351,16 @@ export async function init() {
       cats: cats,
       allProducts: allProducts,
       weightItems: weightItems,
-      totalCustomers: customers.length,
-      newCustomersToday: customers.filter(function(c) { return c.createdAt && new Date(c.createdAt).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) === nowESTDate; }).length,
-      newCustomersWeek:  customers.filter(function(c) { return new Date(c.createdAt || 0) >= weekStartBound; }).length,
-      newCustomers: customers.filter(function(c) { return new Date(c.createdAt || 0) >= monthStartBound; }).length,
-      loyalCustomers: customers.filter(function(c) { return c.isLoyal || c.loyaltyPoints > 0; }).length,
-      churnRisk: customers.filter(function(c) { var l = new Date(c.updatedAt || 0); return l < t60 && l.getFullYear() > 2000; }).length,
-      newCustomersPerDay7:  +(nc7  / 7).toFixed(1),
-      newCustomersPerDay30: +(nc30 / 30).toFixed(1),
-      loyaltyGrowth: lgData,
-      _customers: customers
+      totalCustomers:     custStats.total        || 0,
+      newCustomersToday:  custStats.newToday      || 0,
+      newCustomersWeek:   custStats.newWeek       || 0,
+      newCustomers:       custStats.newMonth      || 0,
+      loyalCustomers:     custStats.loyal         || 0,
+      churnRisk:          custStats.churnRisk     || 0,
+      newCustomersPerDay7:  +((custStats.newLast7  || 0) / 7).toFixed(1),
+      newCustomersPerDay30: +((custStats.newLast30 || 0) / 30).toFixed(1),
+      loyaltyGrowth:      custStats.loyaltyGrowth || [],
+      _customers: null  // loaded lazily when Customers tab opens
     });
 
     var _mode2 = state.isDemo ? 'demo' : 'live';

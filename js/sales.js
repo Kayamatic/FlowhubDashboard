@@ -7,6 +7,15 @@ export function setTab(t) {
   state.currentTab = t;
   ['sales','inventory','customers'].forEach(function(x) { document.getElementById('t-' + x).className = 'tab' + (x === t ? ' on' : ''); });
   document.getElementById('rangeBar').style.display = t === 'sales' ? '' : 'none';
+  // Lazy-load full customer list on first visit to Customers tab
+  if (t === 'customers' && state.SD && !state.SD._customers) {
+    document.getElementById('panel').innerHTML = '<div class="card"><div class="clabel">Customers</div><div class="cval muted loading-pulse" style="font-size:17px">Loading customers<span class="ldots"></span></div></div>';
+    fetch('/api/customers').then(function(r) { return r.json(); }).then(function(raw) {
+      state.SD._customers = raw.data || (Array.isArray(raw) ? raw : []);
+      renderPanel();
+    }).catch(function() { renderPanel(); });
+    return;
+  }
   renderPanel();
 }
 
