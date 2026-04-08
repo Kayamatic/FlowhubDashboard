@@ -18,7 +18,7 @@ export var state = {
   _mobileView: 'data'
 };
 
-var CACHE_KEY = 'flowhub_cache', CACHE_TTL = 3 * 60 * 1000;
+var CACHE_KEY = 'flowhub_cache_v2', CACHE_TTL = 3 * 60 * 1000;
 
 export function loadCache() {
   try {
@@ -368,6 +368,7 @@ export async function init() {
     renderPanel();
 
     var ss = await salesStatsP;
+    if (ss.error) throw new Error('sales-stats: ' + ss.error);
 
     Object.assign(state.SD, {
       salesReady: true,
