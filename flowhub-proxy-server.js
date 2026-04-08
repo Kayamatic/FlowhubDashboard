@@ -372,7 +372,18 @@ const PORT = process.env.PORT || 3001;
 app.use(compression());
 app.use(cors());
 app.use(express.json());
-app.use(express.static(__dirname, { maxAge: '1h', etag: true }));
+app.use(express.static(__dirname, {
+  maxAge: 0,
+  etag: true,
+  setHeaders: function(res, path) {
+    // Cache images/fonts aggressively; keep JS/CSS/HTML always fresh
+    if (/\.(png|jpg|jpeg|gif|ico|woff2?)$/i.test(path)) {
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+    } else {
+      res.setHeader('Cache-Control', 'no-cache');
+    }
+  }
+}));
 
 // ── Session-based auth (HTML login page) ─────────────────────────────────────
 const bcrypt   = require('bcryptjs');
