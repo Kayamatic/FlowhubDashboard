@@ -265,10 +265,16 @@ export async function init() {
     var weekBeforeLastStartStr = localDateStr(new Date(new Date(lastWeekStartStr + 'T12:00:00Z').getTime() - 7 * 86400000));
     var monthBeforeLastEndStr   = localDateStr(new Date(new Date(lastMonthStartStr + 'T12:00:00Z').getTime() - 86400000));
     var monthBeforeLastStartStr = monthBeforeLastEndStr.slice(0, 8) + '01';
+    function fetchJSON(url) {
+      return fetch(url).then(function(r) {
+        if (r.status === 401) { localStorage.removeItem(CACHE_KEY); window.location.href = '/login'; throw new Error('session_expired'); }
+        return r.json();
+      });
+    }
     var sessP       = fetch('/api/session-info').then(function(r) { return r.json(); }).catch(function() { return {}; });
-    var salesStatsP = fetch('/api/sales-stats').then(function(r) { return r.json(); });
-    var inventoryP  = fetch('/api/inventory').then(function(r) { return r.json(); });
-    var custStatsP  = fetch('/api/customer-stats').then(function(r) { return r.json(); });
+    var salesStatsP = fetchJSON('/api/sales-stats');
+    var inventoryP  = fetchJSON('/api/inventory');
+    var custStatsP  = fetchJSON('/api/customer-stats');
 
     var sessInfo  = await sessP;
     state.isDemo  = sessInfo.demo || false;
@@ -368,7 +374,6 @@ export async function init() {
     renderPanel();
 
     var ss = await salesStatsP;
-    if (ss.error) throw new Error('sales-stats: ' + ss.error);
 
     Object.assign(state.SD, {
       salesReady: true,
