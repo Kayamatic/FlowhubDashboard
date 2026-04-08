@@ -45,6 +45,12 @@ db.exec(`
     updated_at   TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_aiq_src ON aiq_contacts(src_id);
+  CREATE TABLE IF NOT EXISTS sessions (
+    token      TEXT PRIMARY KEY,
+    user       TEXT NOT NULL,
+    demo       INTEGER NOT NULL DEFAULT 0,
+    expires_at INTEGER NOT NULL
+  );
 `);
 
 // Demo DB helpers — separate caches for demo sessions
@@ -387,8 +393,13 @@ app.use(express.static(__dirname, {
 
 // ── Session-based auth (HTML login page) ─────────────────────────────────────
 const bcrypt   = require('bcryptjs');
-const sessions = new Map(); // token → { user, demo }
 const DEMO_USERS = new Set(['617Demo']); // usernames that get demo data
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const _sessGet = db.prepare('SELECT user, demo FROM sessions WHERE token = ? AND expires_at > ?');
+const _sessSet = db.prepare('INSERT OR REPLACE INTO sessions (token, user, demo, expires_at) VALUES (?, ?, ?, ?)');
+const _sessDel = db.prepare('DELETE FROM sessions WHERE token = ?');
+// Clean up expired sessions on startup
+db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(Date.now());
 
 const USERS_FILE = __dirname + '/users.json';
 function loadUsers() {
@@ -464,7 +475,7 @@ if (LEGACY_PASS || fs.existsSync(USERS_FILE)) {
     }
     if (ok) {
       const token = crypto.randomBytes(32).toString('hex');
-      sessions.set(token, { user, demo: DEMO_USERS.has(user) });
+      _sessSet.run(token, user, DEMO_USERS.has(user) ? 1 : 0, Date.now() + SESSION_TTL_MS);
       res.setHeader('Set-Cookie', 'dash_sess=' + token + '; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000');
       logAccess('LOGIN_OK', user, req);
       return res.redirect('/dashboard.html');
@@ -476,7 +487,7 @@ if (LEGACY_PASS || fs.existsSync(USERS_FILE)) {
   // Logout
   app.get('/logout', function(req, res) {
     var cookies = parseCookies(req);
-    if (cookies.dash_sess) sessions.delete(cookies.dash_sess);
+    if (cookies.dash_sess) _sessDel.run(cookies.dash_sess);
     res.setHeader('Set-Cookie', 'dash_sess=; Path=/; HttpOnly; Max-Age=0');
     res.redirect('/login');
   });
@@ -484,10 +495,10 @@ if (LEGACY_PASS || fs.existsSync(USERS_FILE)) {
   // Auth guard — runs before static files
   app.use(function(req, res, next) {
     var cookies = parseCookies(req);
-    var sess = sessions.get(cookies.dash_sess);
+    var sess = cookies.dash_sess ? _sessGet.get(cookies.dash_sess, Date.now()) : null;
     if (sess) {
       req.dashUser = sess.user;
-      req.demoMode = sess.demo || false;
+      req.demoMode = sess.demo === 1 || sess.demo === true || false;
       // Wrap in AsyncLocalStorage so all downstream fetch functions detect demo mode
       return reqCtx.run({ demo: req.demoMode }, next);
     }
