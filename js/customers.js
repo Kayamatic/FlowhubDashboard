@@ -73,7 +73,7 @@ export function renderCustomersHTML() {
   h += '<div class="box" style="border-left:4px solid #c8922a">';
   h += '<div class="boxtitle" style="margin-bottom:8px">Loyalty Point Lookup</div>';
   h += '<input id="loyalty-search" type="text" placeholder="Search customer by name\u2026" autocomplete="off" spellcheck="false" style="width:100%;background:#0a0a0a;border:1px solid #444;color:#f0e8d8;padding:10px 12px;border-radius:4px;font-size:15px;font-family:inherit;outline:none;margin-bottom:8px">';
-  h += '<div id="loyalty-results" style="max-height:260px;overflow-y:auto"><div style="color:#555;font-size:13px;padding:6px 0">Type a customer name to look up their points\u2026</div></div>';
+  h += '<div id="loyalty-results" style="max-height:260px;overflow-y:auto"><div style="color:#999;font-size:13px;padding:6px 0">Type a customer name to look up their points\u2026</div></div>';
   h += '</div>';
 
   // ── Stats cards ──
