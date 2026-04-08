@@ -559,7 +559,7 @@ app.get("/api/session-info", (q,s) => {
   s.json({ demo: q.demoMode || false, user: q.dashUser || null });
 });
 app.get("/api/inventory", async(q,s) => {
-  try { s.setHeader('Cache-Control','public,max-age=300'); s.json(await fetchInventory()); }
+  try { s.setHeader('Cache-Control','private,max-age=300'); s.json(await fetchInventory()); }
   catch(e) { s.status(500).json({error: e.message}); }
 });
 
@@ -819,7 +819,7 @@ app.get("/api/sales-stats", async(q,s) => {
       d30:   nvr(d30O,t30bound,   newLast30)
     };
 
-    s.setHeader('Cache-Control','public,max-age=60');
+    s.setHeader('Cache-Control','private,max-age=60');
     s.json({
       todayRev:      +sumRev(tO).toFixed(2),  todayCount:  tO.length,
       yesterdayRev:  +sumRev(yO).toFixed(2),  yesterdayCount: yO.length,
@@ -873,7 +873,7 @@ app.get("/api/customer-stats", async(q,s) => {
       loyaltyGrowth.push({ date: ds, count: lgBisect(loyalDates, ds) });
     }
 
-    s.setHeader('Cache-Control','public,max-age=300');
+    s.setHeader('Cache-Control','private,max-age=300');
     s.json({
       total: customers.length,
       newToday:   customers.filter(c => c.createdAt && new Date(c.createdAt).toLocaleDateString('en-CA',{timeZone:'America/New_York'}) === todayEST).length,
