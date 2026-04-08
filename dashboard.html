@@ -142,8 +142,10 @@ body{background:#0a0a0a;color:#f0e8d8;font-family:'Courier New',monospace;height
 
   /* 617THC logo: hide from header, show above nav tabs */
   .hdr-logo{display:none}
-  .mob-logo{display:flex;justify-content:center;align-items:center;background:#141414;border-bottom:1px solid #222;padding:10px;flex-shrink:0}
-  .mob-logo svg{height:38px;width:auto}
+  .mob-logo{display:flex;justify-content:center;align-items:center;background:#141414;border-bottom:1px solid #222;padding:8px 10px;flex-shrink:0;overflow:hidden}
+  .mob-logo-inner{gap:8px;max-width:100%}
+  .mob-logo svg{height:28px;width:auto;max-width:52vw;flex-shrink:1}
+  .mob-clyde-logo{height:30px;width:auto;max-width:36vw;object-fit:contain;flex-shrink:1}
 
   /* Mobile view toggle nav */
   .mobile-nav{display:flex;background:#141414;border-bottom:2px solid #333;flex-shrink:0}
