@@ -705,6 +705,137 @@ app.get("/api/orders", async(q,s) => {
   } catch(e) { s.status(500).json({error: e.message}); }
 });
 
+// ── Sales stats — server-computed analytics, replaces raw orders download ─────
+app.get("/api/sales-stats", async(q,s) => {
+  try {
+    const now = new Date();
+    const nowEST = now.toLocaleString('sv', {timeZone:'America/New_York'});
+    const todayStr = nowEST.slice(0,10);
+    const yesterdayStr = new Date(now.getTime()-MS_PER_DAY).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
+
+    // Date range helpers
+    const dow = now.getDay();
+    const weekStartStr = new Date(now.getTime() - dow*MS_PER_DAY).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
+    const monthStartStr = todayStr.slice(0,8)+'01';
+    const lastWeekEndStr = new Date(new Date(weekStartStr+'T12:00:00Z').getTime()-MS_PER_DAY).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
+    const lastWeekStartStr = new Date(new Date(weekStartStr+'T12:00:00Z').getTime()-7*MS_PER_DAY).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
+    const lastMonthEndStr = new Date(new Date(monthStartStr+'T12:00:00Z').getTime()-MS_PER_DAY).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
+    const lastMonthStartStr = lastMonthEndStr.slice(0,8)+'01';
+    const weekBeforeLastEndStr = new Date(new Date(lastWeekStartStr+'T12:00:00Z').getTime()-MS_PER_DAY).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
+    const weekBeforeLastStartStr = new Date(new Date(lastWeekStartStr+'T12:00:00Z').getTime()-7*MS_PER_DAY).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
+    const monthBeforeLastEndStr = new Date(new Date(lastMonthStartStr+'T12:00:00Z').getTime()-MS_PER_DAY).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
+    const monthBeforeLastStartStr = monthBeforeLastEndStr.slice(0,8)+'01';
+    const fourWeeksBackStr = new Date(now.getTime()-29*MS_PER_DAY).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
+    const mo = [weekStartStr,monthStartStr,lastMonthStartStr,monthBeforeLastStartStr,weekBeforeLastStartStr,fourWeeksBackStr].sort()[0];
+
+    const [orders, customers] = await Promise.all([
+      fetchAllOrdersCached(mo, todayStr),
+      fetchAllCustomers()
+    ]);
+    const sold = orders.filter(o => o.orderStatus==='sold' && !o.voided && o.completedOn);
+
+    const weekStartBound        = estDayStart(weekStartStr);
+    const monthStartBound       = estDayStart(monthStartStr);
+    const lastWeekStartBound    = estDayStart(lastWeekStartStr);
+    const lastWeekEndBound      = estDayEnd(lastWeekEndStr);
+    const lastMonthStartBound   = estDayStart(lastMonthStartStr);
+    const lastMonthEndBound     = estDayEnd(lastMonthEndStr);
+    const wblStartBound         = estDayStart(weekBeforeLastStartStr);
+    const wblEndBound           = estDayEnd(weekBeforeLastEndStr);
+    const mblStartBound         = estDayStart(monthBeforeLastStartStr);
+    const mblEndBound           = estDayEnd(monthBeforeLastEndStr);
+    const t7bound  = new Date(now.getTime()-7*MS_PER_DAY);
+    const t30bound = new Date(now.getTime()-30*MS_PER_DAY);
+
+    const tO  = sold.filter(o => estInfo(o.completedOn).date === todayStr);
+    const yO  = sold.filter(o => estInfo(o.completedOn).date === yesterdayStr);
+    const wO  = sold.filter(o => new Date(o.completedOn) >= weekStartBound);
+    const mO  = sold.filter(o => new Date(o.completedOn) >= monthStartBound);
+    const lwO = sold.filter(o => { const t=new Date(o.completedOn); return t>=lastWeekStartBound && t<=lastWeekEndBound; });
+    const lmO = sold.filter(o => { const t=new Date(o.completedOn); return t>=lastMonthStartBound && t<=lastMonthEndBound; });
+    const d7O  = sold.filter(o => new Date(o.completedOn) >= t7bound);
+    const d30O = sold.filter(o => new Date(o.completedOn) >= t30bound);
+
+    const sumRev = arr => arr.reduce((s,o)=>s+oTotal(o),0);
+
+    // Hourly (today)
+    const hm=[0,0,0,0,0,0,0,0,0,0,0,0], hc=[0,0,0,0,0,0,0,0,0,0,0,0];
+    tO.forEach(o => { const {hour:hr}=estInfo(o.completedOn); if(hr>=9&&hr<=20){hm[hr-9]+=oTotal(o);hc[hr-9]++;} });
+
+    // Top products
+    function buildTop(arr, n=20) {
+      const pm={};
+      arr.forEach(o=>(o.itemsInCart||[]).forEach(i=>{const k=i.productName||'Unknown';if(!pm[k])pm[k]={rev:0,units:0};pm[k].rev+=(i.totalPrice||0);pm[k].units+=(i.quantity||1);}));
+      return Object.entries(pm).map(([name,v])=>({name,rev:Math.round(v.rev),units:v.units})).sort((a,b)=>b.rev-a.rev).slice(0,n);
+    }
+    function buildTopUnits(arr, n=20) {
+      const pm={};
+      arr.forEach(o=>(o.itemsInCart||[]).forEach(i=>{const k=i.productName||'Unknown';if(!pm[k])pm[k]={rev:0,units:0};pm[k].rev+=(i.totalPrice||0);pm[k].units+=(i.quantity||1);}));
+      return Object.entries(pm).map(([name,v])=>({name,rev:Math.round(v.rev),units:v.units})).sort((a,b)=>b.units-a.units).slice(0,n);
+    }
+
+    // Baselines
+    function msMidnight(d) { const p=new Date(d).toLocaleString('en-US',{timeZone:'America/New_York',hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'}).split(':').map(Number); return((p[0]*3600)+(p[1]*60)+p[2])*1000; }
+    function estDate(d) { return new Date(d).toLocaleDateString('en-CA',{timeZone:'America/New_York'}); }
+    const nowMs = msMidnight(now);
+    const todayDom = parseInt(todayStr.slice(8,10));
+
+    let blToday=0, blYesterday=0, blWeek=0, blMonth=0;
+    for(let k=1;k<=4;k++){
+      const ds=estDate(new Date(now.getTime()-k*7*MS_PER_DAY));
+      let s=0; sold.forEach(o=>{if(!o.completedOn||estDate(o.completedOn)!==ds)return;if(msMidnight(o.completedOn)<=nowMs)s+=oTotal(o);}); blToday+=s;
+    }
+    blToday/=4;
+    for(let k=1;k<=4;k++){
+      const ds=estDate(new Date(now.getTime()-MS_PER_DAY-k*7*MS_PER_DAY));
+      let s=0; sold.forEach(o=>{if(o.completedOn&&estDate(o.completedOn)===ds)s+=oTotal(o);}); blYesterday+=s;
+    }
+    blYesterday/=4;
+    const weekElapsed=now.getTime()-weekStartBound.getTime();
+    sold.forEach(o=>{if(!o.completedOn)return;const t=new Date(o.completedOn).getTime();if(t>=lastWeekStartBound.getTime()&&t<=lastWeekStartBound.getTime()+weekElapsed)blWeek+=oTotal(o);});
+    sold.forEach(o=>{if(!o.completedOn)return;const ds=estDate(o.completedOn);if(ds<lastMonthStartStr||ds>lastMonthEndStr)return;const dom=parseInt(ds.slice(8,10));if(dom<todayDom){blMonth+=oTotal(o);return;}if(dom===todayDom&&msMidnight(o.completedOn)<=nowMs)blMonth+=oTotal(o);});
+    const blLastWeek  = sold.filter(o=>{const t=new Date(o.completedOn);return t>=wblStartBound&&t<=wblEndBound;}).reduce((s,o)=>s+oTotal(o),0);
+    const blLastMonth = sold.filter(o=>{const t=new Date(o.completedOn);return t>=mblStartBound&&t<=mblEndBound;}).reduce((s,o)=>s+oTotal(o),0);
+
+    // New vs returning
+    const custIdMap={};
+    customers.forEach(c=>{const id=c.id||c._id||c.customerId;if(id)custIdMap[id]=c.createdAt;});
+    function nvr(orderSet, periodStart, newCount) {
+      const retIds=new Set();
+      orderSet.forEach(o=>{const cid=o.customerId;if(!cid)return;const ca=custIdMap[cid];if(ca&&new Date(ca)<periodStart)retIds.add(cid);});
+      const n=newCount,r=retIds.size,tot=n+r;
+      return{newC:n,ret:r,pctNew:tot?Math.round(n/tot*100):0,pctRet:tot?Math.round(r/tot*100):0};
+    }
+    const todayStart=estDayStart(todayStr);
+    const newToday=customers.filter(c=>c.createdAt&&new Date(c.createdAt).toLocaleDateString('en-CA',{timeZone:'America/New_York'})===todayStr).length;
+    const newLast7=customers.filter(c=>new Date(c.createdAt||0)>=t7bound).length;
+    const newLast30=customers.filter(c=>new Date(c.createdAt||0)>=t30bound).length;
+    const newVsReturning={
+      today: nvr(tO,  todayStart, newToday),
+      d7:    nvr(d7O, t7bound,    newLast7),
+      d30:   nvr(d30O,t30bound,   newLast30)
+    };
+
+    s.json({
+      todayRev:      +sumRev(tO).toFixed(2),  todayCount:  tO.length,
+      yesterdayRev:  +sumRev(yO).toFixed(2),  yesterdayCount: yO.length,
+      weekRev:       +sumRev(wO).toFixed(2),  weekCount:   wO.length,
+      monthRev:      +sumRev(mO).toFixed(2),  monthCount:  mO.length,
+      lastWeekRev:   +sumRev(lwO).toFixed(2), lastWeekCount: lwO.length,
+      lastWeekLabel: lastWeekStartStr+' – '+lastWeekEndStr,
+      lastMonthRev:  +sumRev(lmO).toFixed(2), lastMonthCount: lmO.length,
+      lastMonthLabel: lastMonthStartStr.slice(0,7),
+      hourly: hm, hourlyCount: hc,
+      topProducts: buildTop(mO), topProductsToday: buildTop(tO), topProductsWeek: buildTop(wO),
+      fastestDepleting7d: buildTopUnits(d7O), fastestDepleting30d: buildTopUnits(d30O),
+      newVsReturning,
+      blToday: +blToday.toFixed(2), blYesterday: +blYesterday.toFixed(2),
+      blWeek:  +blWeek.toFixed(2),  blMonth:     +blMonth.toFixed(2),
+      blLastWeek: +blLastWeek.toFixed(2), blLastMonth: +blLastMonth.toFixed(2)
+    });
+  } catch(e) { s.status(500).json({error: e.message}); }
+});
+
 app.get("/api/customers", async(q,s) => {
   try {
     const all = await fetchAllCustomers();

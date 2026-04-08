@@ -269,12 +269,9 @@ export async function init() {
     var weekBeforeLastStartStr = localDateStr(new Date(new Date(lastWeekStartStr + 'T12:00:00Z').getTime() - 7 * 86400000));
     var monthBeforeLastEndStr   = localDateStr(new Date(new Date(lastMonthStartStr + 'T12:00:00Z').getTime() - 86400000));
     var monthBeforeLastStartStr = monthBeforeLastEndStr.slice(0, 8) + '01';
-    var fourWeeksBackStr = localDateStr(new Date(now.getTime() - 29 * 86400000));
-    var mo = [weekStartStr, monthStartStr, thirtyDaysAgo, lastMonthStartStr, monthBeforeLastStartStr, weekBeforeLastStartStr, fourWeeksBackStr].sort()[0];
-
-    var ordersP    = fetch('/api/orders?start_date=' + mo + '&end_date=' + today).then(function(r) { return r.json(); });
-    var inventoryP = fetch('/api/inventory').then(function(r) { return r.json(); });
-    var custStatsP = fetch('/api/customer-stats').then(function(r) { return r.json(); });
+    var salesStatsP = fetch('/api/sales-stats').then(function(r) { return r.json(); });
+    var inventoryP  = fetch('/api/inventory').then(function(r) { return r.json(); });
+    var custStatsP  = fetch('/api/customer-stats').then(function(r) { return r.json(); });
 
     var rawP = await inventoryP;
     var custStats = await custStatsP;
@@ -371,183 +368,32 @@ export async function init() {
     if (low.length) { var lb = document.getElementById('lowbadge'); lb.textContent = low.length + ' LOW STOCK'; lb.style.display = 'inline'; }
     renderPanel();
 
-    var rawO = await ordersP;
-    var orders = rawO.orders || (Array.isArray(rawO) ? rawO : []);
-    function oTotal(o) { if (!o.totals) return 0; return (o.totals.subTotal || 0) - (o.totals.totalDiscounts || 0); }
-    function sumOrders(arr) { return arr.reduce(function(s, o) { return s + oTotal(o); }, 0); }
-
-    orders = orders.filter(function(o) { return o.orderStatus === 'sold' && !o.voided; });
-    var todayLocal     = now.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-    var yesterdayLocal = new Date(now.getTime() - 86400000).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-    var tO = orders.filter(function(o) {
-      if (!o.completedOn) return false;
-      return new Date(o.completedOn).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) === todayLocal;
-    });
-    var yO = orders.filter(function(o) {
-      if (!o.completedOn) return false;
-      return new Date(o.completedOn).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) === yesterdayLocal;
-    });
-    var wO = orders.filter(function(o) { return o.completedOn && new Date(o.completedOn) >= weekStartBound; });
-    var mO = orders.filter(function(o) { return o.completedOn && new Date(o.completedOn) >= monthStartBound; });
-    var lastWeekStartBound = new Date(estToISO(lastWeekStartStr, '00:00:00'));
-    var lastWeekEndBound   = new Date(estToISO(lastWeekEndStr,   '23:59:59'));
-    var lastMonthStartBound = new Date(estToISO(lastMonthStartStr, '00:00:00'));
-    var lastMonthEndBound   = new Date(estToISO(lastMonthEndStr,   '23:59:59'));
-    var lwO  = orders.filter(function(o) { return o.completedOn && new Date(o.completedOn) >= lastWeekStartBound  && new Date(o.completedOn) <= lastWeekEndBound; });
-    var lmO  = orders.filter(function(o) { return o.completedOn && new Date(o.completedOn) >= lastMonthStartBound && new Date(o.completedOn) <= lastMonthEndBound; });
-
-    // ---- Color baselines for sales cards ----
-    function msSinceMidnightEst(d) {
-      var s = new Date(d).toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      var p = s.split(':').map(Number);
-      return ((p[0] * 3600) + (p[1] * 60) + p[2]) * 1000;
-    }
-    function estDateOf(d) { return new Date(d).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); }
-    var nowMsToday = msSinceMidnightEst(now);
-
-    // Today: avg of last 4 same-weekdays, partial up to current time-of-day
-    var tBl = [];
-    for (var k = 1; k <= 4; k++) {
-      var ds = estDateOf(new Date(now.getTime() - k * 7 * 86400000));
-      var s = 0;
-      orders.forEach(function(o) {
-        if (!o.completedOn || estDateOf(o.completedOn) !== ds) return;
-        if (msSinceMidnightEst(o.completedOn) <= nowMsToday) s += oTotal(o);
-      });
-      tBl.push(s);
-    }
-    var blToday = tBl.reduce(function(a,b){return a+b;},0) / 4;
-
-    // Yesterday: avg of 4 same-weekdays prior to yesterday (full days)
-    var yBl = [];
-    for (var k = 1; k <= 4; k++) {
-      var ds = estDateOf(new Date(now.getTime() - 86400000 - k * 7 * 86400000));
-      var s = 0;
-      orders.forEach(function(o) { if (o.completedOn && estDateOf(o.completedOn) === ds) s += oTotal(o); });
-      yBl.push(s);
-    }
-    var blYesterday = yBl.reduce(function(a,b){return a+b;},0) / 4;
-
-    // This Week: last week's revenue through equivalent elapsed point
-    var weekElapsedMs = now.getTime() - weekStartBound.getTime();
-    var lwCutoff = lastWeekStartBound.getTime() + weekElapsedMs;
-    var blWeek = 0;
-    orders.forEach(function(o) {
-      if (!o.completedOn) return;
-      var t = new Date(o.completedOn).getTime();
-      if (t >= lastWeekStartBound.getTime() && t <= lwCutoff) blWeek += oTotal(o);
-    });
-
-    // This Month: last month through same day-of-month and time-of-day
-    var todayDom = parseInt(nowESTDate.slice(8, 10));
-    var blMonth = 0;
-    orders.forEach(function(o) {
-      if (!o.completedOn) return;
-      var ds = estDateOf(o.completedOn);
-      if (ds < lastMonthStartStr || ds > lastMonthEndStr) return;
-      var dom = parseInt(ds.slice(8, 10));
-      if (dom < todayDom) { blMonth += oTotal(o); return; }
-      if (dom === todayDom && msSinceMidnightEst(o.completedOn) <= nowMsToday) blMonth += oTotal(o);
-    });
-
-    // Last Week: week before last
-    var weekBeforeLastStartBound = new Date(estToISO(weekBeforeLastStartStr, '00:00:00'));
-    var weekBeforeLastEndBound   = new Date(estToISO(weekBeforeLastEndStr,   '23:59:59'));
-    var blLastWeek = orders.filter(function(o) { return o.completedOn && new Date(o.completedOn) >= weekBeforeLastStartBound && new Date(o.completedOn) <= weekBeforeLastEndBound; }).reduce(function(s,o){return s+oTotal(o);},0);
-
-    // Last Month: month before last
-    var monthBeforeLastStartBound = new Date(estToISO(monthBeforeLastStartStr, '00:00:00'));
-    var monthBeforeLastEndBound   = new Date(estToISO(monthBeforeLastEndStr,   '23:59:59'));
-    var blLastMonth = orders.filter(function(o) { return o.completedOn && new Date(o.completedOn) >= monthBeforeLastStartBound && new Date(o.completedOn) <= monthBeforeLastEndBound; }).reduce(function(s,o){return s+oTotal(o);},0);
-    var t7bound  = new Date(now.getTime() -  7 * 86400000);
-    var t30bound = new Date(now.getTime() - 30 * 86400000);
-    var d7O  = orders.filter(function(o) { return o.completedOn && new Date(o.completedOn) >= t7bound;  });
-    var d30O = orders.filter(function(o) { return o.completedOn && new Date(o.completedOn) >= t30bound; });
-
-    var hm = [0,0,0,0,0,0,0,0,0,0,0,0];
-    var hc = [0,0,0,0,0,0,0,0,0,0,0,0];
-    tO.forEach(function(o) { var hr = nyHour(o.completedOn); if (hr >= 9 && hr <= 20) { hm[hr - 9] += oTotal(o); hc[hr - 9]++; } });
-
-    function buildTopProducts(orderSet) {
-      var pm = {};
-      orderSet.forEach(function(o) {
-        (o.itemsInCart || []).forEach(function(i) {
-          var n = i.productName || 'Unknown';
-          if (!pm[n]) pm[n] = { rev: 0, units: 0 };
-          pm[n].rev   += (i.totalPrice || 0);
-          pm[n].units += (i.quantity  || 1);
-        });
-      });
-      return Object.keys(pm).map(function(k) { return { name: k, rev: Math.round(pm[k].rev), units: pm[k].units }; }).sort(function(a, b) { return b.rev - a.rev; }).slice(0, 20);
-    }
-    var top      = buildTopProducts(mO);
-    var topToday = buildTopProducts(tO);
-    var topWeek  = buildTopProducts(wO);
-
-    function buildFastestDepleting(orderSet) {
-      var pm = {};
-      orderSet.forEach(function(o) {
-        (o.itemsInCart || []).forEach(function(i) {
-          var n = i.productName || 'Unknown';
-          if (!pm[n]) pm[n] = { rev: 0, units: 0 };
-          pm[n].rev   += (i.totalPrice || 0);
-          pm[n].units += (i.quantity  || 1);
-        });
-      });
-      return Object.keys(pm).map(function(k) { return { name: k, rev: Math.round(pm[k].rev), units: pm[k].units }; }).sort(function(a, b) { return b.units - a.units; }).slice(0, 20);
-    }
-    var dep7d  = buildFastestDepleting(d7O);
-    var dep30d = buildFastestDepleting(d30O);
-
-    var custIdMap = {};
-    customers.forEach(function(c) { var id = c.id || c._id || c.customerId; if (id) custIdMap[id] = c.createdAt; });
-    function calcNvR(orderSet, periodStart, newCount) {
-      var retIds = new Set();
-      orderSet.forEach(function(o) {
-        var cid = o.customerId; if (!cid) return;
-        var ca = custIdMap[cid]; if (!ca) return;
-        if (new Date(ca) < periodStart) retIds.add(cid);
-      });
-      var n = newCount, r = retIds.size, tot = n + r;
-      return { newC: n, ret: r, pctNew: tot ? Math.round(n / tot * 100) : 0, pctRet: tot ? Math.round(r / tot * 100) : 0 };
-    }
-    var todayStart = new Date(estToISO(todayLocal, '00:00:00'));
-    var newVsReturning = {
-      today: calcNvR(tO,  todayStart, state.SD.newCustomersToday || 0),
-      d7:    calcNvR(d7O, t7bound,    customers.filter(function(c) { return new Date(c.createdAt || 0) >= t7bound; }).length),
-      d30:   calcNvR(d30O, t30bound,  customers.filter(function(c) { return new Date(c.createdAt || 0) >= t30bound; }).length)
-    };
+    var ss = await salesStatsP;
 
     Object.assign(state.SD, {
       salesReady: true,
-      todayRev: +sumOrders(tO).toFixed(2),
-      todayCount: tO.length,
-      yesterdayRev: +sumOrders(yO).toFixed(2),
-      yesterdayCount: yO.length,
-      weekRev: +sumOrders(wO).toFixed(2),
-      weekCount: wO.length,
-      monthRev: +sumOrders(mO).toFixed(2),
-      monthCount: mO.length,
-      lastWeekRev: +sumOrders(lwO).toFixed(2),
-      lastWeekCount: lwO.length,
-      lastWeekLabel: lastWeekStartStr + ' – ' + lastWeekEndStr,
-      lastMonthRev: +sumOrders(lmO).toFixed(2),
-      lastMonthCount: lmO.length,
-      lastMonthLabel: lastMonthStartStr.slice(0, 7),
-      hourly: hm,
-      hourlyCount: hc,
-      topProducts: top,
-      topProductsToday: topToday,
-      topProductsWeek: topWeek,
-      fastestDepleting7d: dep7d,
-      fastestDepleting30d: dep30d,
-      newVsReturning: newVsReturning,
-      blToday: +blToday.toFixed(2),
-      blYesterday: +blYesterday.toFixed(2),
-      blWeek: +blWeek.toFixed(2),
-      blMonth: +blMonth.toFixed(2),
-      blLastWeek: +blLastWeek.toFixed(2),
-      blLastMonth: +blLastMonth.toFixed(2)
+      todayRev:       ss.todayRev        || 0,  todayCount:      ss.todayCount      || 0,
+      yesterdayRev:   ss.yesterdayRev    || 0,  yesterdayCount:  ss.yesterdayCount  || 0,
+      weekRev:        ss.weekRev         || 0,  weekCount:       ss.weekCount        || 0,
+      monthRev:       ss.monthRev        || 0,  monthCount:      ss.monthCount       || 0,
+      lastWeekRev:    ss.lastWeekRev     || 0,  lastWeekCount:   ss.lastWeekCount    || 0,
+      lastWeekLabel:  ss.lastWeekLabel   || '',
+      lastMonthRev:   ss.lastMonthRev    || 0,  lastMonthCount:  ss.lastMonthCount   || 0,
+      lastMonthLabel: ss.lastMonthLabel  || '',
+      hourly:         ss.hourly          || [0,0,0,0,0,0,0,0,0,0,0,0],
+      hourlyCount:    ss.hourlyCount     || [0,0,0,0,0,0,0,0,0,0,0,0],
+      topProducts:         ss.topProducts         || [],
+      topProductsToday:    ss.topProductsToday    || [],
+      topProductsWeek:     ss.topProductsWeek     || [],
+      fastestDepleting7d:  ss.fastestDepleting7d  || [],
+      fastestDepleting30d: ss.fastestDepleting30d || [],
+      newVsReturning:      ss.newVsReturning       || {},
+      blToday:      ss.blToday      || 0,
+      blYesterday:  ss.blYesterday  || 0,
+      blWeek:       ss.blWeek       || 0,
+      blMonth:      ss.blMonth      || 0,
+      blLastWeek:   ss.blLastWeek   || 0,
+      blLastMonth:  ss.blLastMonth  || 0
     });
     state.defaultSD = Object.assign({}, state.SD);
     saveCache(state.SD);
