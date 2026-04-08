@@ -227,7 +227,7 @@ export function reloadData() {
   if (state._loading) return;
   var btn = document.getElementById('reloadBtn');
   if (btn) { btn.style.color = '#c8922a'; btn.style.animation = 'spin 1s linear infinite'; }
-  state.SD = null; state.defaultSD = null; state._pre7d = null; state._pre30d = null;
+  state.defaultSD = null; state._pre7d = null; state._pre30d = null;
   init();
 }
 
@@ -338,14 +338,19 @@ export async function init() {
     var monthStartBound = new Date(estToISO(monthStartStr, '00:00:00'));
     var t60 = new Date(now - 60 * 86400000);
 
+    var _hasSales = state.SD && state.SD.salesReady;
     state.SD = Object.assign(state.SD || {}, {
-      salesReady: false,
-      todayRev: 0, todayCount: 0,
-      weekRev: 0, weekCount: 0,
-      monthRev: 0, monthCount: 0,
-      hourly: [0,0,0,0,0,0,0,0,0,0,0,0],
-      hourlyCount: [0,0,0,0,0,0,0,0,0,0,0,0],
-      topProducts: [],
+      // Keep existing sales data visible during refresh — only zero out on first load
+      salesReady:   _hasSales ? state.SD.salesReady   : false,
+      todayRev:     _hasSales ? state.SD.todayRev     : 0,
+      todayCount:   _hasSales ? state.SD.todayCount   : 0,
+      weekRev:      _hasSales ? state.SD.weekRev      : 0,
+      weekCount:    _hasSales ? state.SD.weekCount    : 0,
+      monthRev:     _hasSales ? state.SD.monthRev     : 0,
+      monthCount:   _hasSales ? state.SD.monthCount   : 0,
+      hourly:       _hasSales ? state.SD.hourly       : [0,0,0,0,0,0,0,0,0,0,0,0],
+      hourlyCount:  _hasSales ? state.SD.hourlyCount  : [0,0,0,0,0,0,0,0,0,0,0,0],
+      topProducts:  _hasSales ? state.SD.topProducts  : [],
       totalSkus: inStockAll.length,
       cannabisSkus: cannabisSkus,
       accessorySkus: accessorySkus,
@@ -369,7 +374,7 @@ export async function init() {
     document.getElementById('dot').className = 'dot ' + _mode2;
     document.getElementById('badge').textContent = state.isDemo ? 'DEMO' : 'LIVE';
     document.getElementById('badge').className = 'badge ' + _mode2;
-    document.getElementById('sync').textContent = 'inventory ready \u2014 loading orders\u2026';
+    document.getElementById('sync').textContent = _hasSales ? 'refreshing\u2026' : 'inventory ready \u2014 loading orders\u2026';
     if (low.length) { var lb = document.getElementById('lowbadge'); lb.textContent = low.length + ' LOW STOCK'; lb.style.display = 'inline'; }
     renderPanel();
 
