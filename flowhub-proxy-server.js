@@ -1,6 +1,7 @@
 require("dotenv").config({ override: true });
 const express = require("express");
 const cors = require("cors");
+const compression = require("compression");
 const fs = require("fs");
 const crypto = require("crypto");
 const { AsyncLocalStorage } = require('async_hooks');
@@ -368,8 +369,10 @@ let fetch = globalThis.fetch;
 if (!fetch) fetch = require("node-fetch");
 const app = express();
 const PORT = process.env.PORT || 3001;
+app.use(compression());
 app.use(cors());
 app.use(express.json());
+app.use(express.static(__dirname, { maxAge: '1h', etag: true }));
 
 // ── Session-based auth (HTML login page) ─────────────────────────────────────
 const bcrypt   = require('bcryptjs');
@@ -556,7 +559,7 @@ app.get("/api/session-info", (q,s) => {
   s.json({ demo: q.demoMode || false, user: q.dashUser || null });
 });
 app.get("/api/inventory", async(q,s) => {
-  try { s.json(await fetchInventory()); }
+  try { s.setHeader('Cache-Control','public,max-age=300'); s.json(await fetchInventory()); }
   catch(e) { s.status(500).json({error: e.message}); }
 });
 
@@ -816,6 +819,7 @@ app.get("/api/sales-stats", async(q,s) => {
       d30:   nvr(d30O,t30bound,   newLast30)
     };
 
+    s.setHeader('Cache-Control','public,max-age=60');
     s.json({
       todayRev:      +sumRev(tO).toFixed(2),  todayCount:  tO.length,
       yesterdayRev:  +sumRev(yO).toFixed(2),  yesterdayCount: yO.length,
@@ -869,6 +873,7 @@ app.get("/api/customer-stats", async(q,s) => {
       loyaltyGrowth.push({ date: ds, count: lgBisect(loyalDates, ds) });
     }
 
+    s.setHeader('Cache-Control','public,max-age=300');
     s.json({
       total: customers.length,
       newToday:   customers.filter(c => c.createdAt && new Date(c.createdAt).toLocaleDateString('en-CA',{timeZone:'America/New_York'}) === todayEST).length,
@@ -2775,16 +2780,21 @@ async function warmCaches() {
     .catch(e => console.error('[warmup] Phase 2b error:', e.message));
 }
 
-app.listen(PORT, () => {
-  console.log("\n✅ Flowhub proxy running!");
-  console.log("   Open: http://localhost:" + PORT + "/dashboard.html");
-  console.log("   Credentials: " + (process.env.FLOWHUB_API_KEY && LOC ? "YES ✅" : "NO ❌ check .env"));
-  console.log("   Alpine IQ: " + (AIQ_KEY && AIQ_UID ? "YES ✅ (UID " + AIQ_UID + ")" : "NO ❌ set AIQ_API_KEY + AIQ_UID in .env"));
-  console.log("   Demo DB: " + (fs.existsSync(__dirname + '/demo.db') ? "YES ✅ (login as demo user)" : "NO — run: node generate-demo-data.js") + "\n");
-  warmCaches();
+(async () => {
+  await new Promise((resolve) => {
+    app.listen(PORT, () => {
+      console.log("\n✅ Flowhub proxy running!");
+      console.log("   Open: http://localhost:" + PORT + "/dashboard.html");
+      console.log("   Credentials: " + (process.env.FLOWHUB_API_KEY && LOC ? "YES ✅" : "NO ❌ check .env"));
+      console.log("   Alpine IQ: " + (AIQ_KEY && AIQ_UID ? "YES ✅ (UID " + AIQ_UID + ")" : "NO ❌ set AIQ_API_KEY + AIQ_UID in .env"));
+      console.log("   Demo DB: " + (fs.existsSync(__dirname + '/demo.db') ? "YES ✅ (login as demo user)" : "NO — run: node generate-demo-data.js") + "\n");
+      resolve();
+    });
+  });
+  await warmCaches();
   // Proactive background poll — keeps today's orders current even when nobody is on the dashboard
   setInterval(() => {
     const today = _estToday();
     fetchAllOrdersCached(today, today).catch(e => console.error('[poll] today refresh error:', e.message));
   }, TODAY_TTL);
-});
+})();

@@ -224,20 +224,16 @@ export async function fetchRollingRange(periodDays, nPeriods, label) {
 }
 
 export function reloadData() {
+  if (state._loading) return;
   var btn = document.getElementById('reloadBtn');
-  btn.style.color = '#c8922a';
-  btn.style.animation = 'spin 1s linear infinite';
+  if (btn) { btn.style.color = '#c8922a'; btn.style.animation = 'spin 1s linear infinite'; }
   state.SD = null; state.defaultSD = null; state._pre7d = null; state._pre30d = null;
   init();
 }
 
 export async function init() {
-  // Check if this is a demo session
-  try {
-    var sessResp = await fetch('/api/session-info');
-    var sessInfo = await sessResp.json();
-    state.isDemo = sessInfo.demo || false;
-  } catch(e) { state.isDemo = false; }
+  if (state._loading) return; // prevent double-init
+  state._loading = true;
 
   var cached = loadCache();
   if (cached) {
@@ -269,10 +265,13 @@ export async function init() {
     var weekBeforeLastStartStr = localDateStr(new Date(new Date(lastWeekStartStr + 'T12:00:00Z').getTime() - 7 * 86400000));
     var monthBeforeLastEndStr   = localDateStr(new Date(new Date(lastMonthStartStr + 'T12:00:00Z').getTime() - 86400000));
     var monthBeforeLastStartStr = monthBeforeLastEndStr.slice(0, 8) + '01';
+    var sessP       = fetch('/api/session-info').then(function(r) { return r.json(); }).catch(function() { return {}; });
     var salesStatsP = fetch('/api/sales-stats').then(function(r) { return r.json(); });
     var inventoryP  = fetch('/api/inventory').then(function(r) { return r.json(); });
     var custStatsP  = fetch('/api/customer-stats').then(function(r) { return r.json(); });
 
+    var sessInfo  = await sessP;
+    state.isDemo  = sessInfo.demo || false;
     var rawP = await inventoryP;
     var custStats = await custStatsP;
     var products  = rawP.data || (Array.isArray(rawP) ? rawP : []);
@@ -427,6 +426,10 @@ export async function init() {
       addMsg('assistant', 'Error loading data: ' + e.message, false);
     }
     console.error(e);
+  } finally {
+    state._loading = false;
+    var rb = document.getElementById('reloadBtn');
+    if (rb) { rb.style.color = '#555'; rb.style.animation = ''; }
   }
 }
 
