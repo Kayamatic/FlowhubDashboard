@@ -531,7 +531,7 @@ async function proxy(url, res) {
 // ── Inventory cache (5-min TTL — inventory doesn't change second-to-second) ───
 let _invCache = null, _invCacheTime = 0;
 const INV_TTL  = 5 * 60 * 1000;
-const CUST_TTL = 5 * 60 * 1000;
+const CUST_TTL = 30 * 60 * 1000;
 async function fetchInventory() {
   if (isDemo()) return demoFetchInventory();
   if (_invCache && Date.now() - _invCacheTime < INV_TTL) return _invCache;
@@ -704,23 +704,39 @@ async function fetchAllOrdersCached(start, end) {
 }
 
 let _custCache = null, _custCacheTime = 0;
+let _custFetchInFlight = null; // prevents concurrent fetches
 async function fetchAllCustomers() {
   if (isDemo()) return demoFetchCustomers();
   if (_custCache && Date.now() - _custCacheTime < CUST_TTL) return _custCache;
-  let all = [], page = 1;
-  while (true) {
-    const r = await fetch("https://api.flowhub.co/v1/customers/?page_size=500&page=" + page, {headers: HDRS});
-    const d = await r.json();
-    const batch = d.data || (Array.isArray(d) ? d : []);
-    all = all.concat(batch);
-    if (batch.length < 500) break;
-    page++;
+  if (_custFetchInFlight) return _custFetchInFlight; // deduplicate concurrent requests
+  _custFetchInFlight = (async () => {
+    let all = [], page = 1;
+    while (true) {
+      const r = await fetch("https://api.flowhub.co/v1/customers/?page_size=500&page=" + page, {headers: HDRS});
+      const d = await r.json();
+      const batch = d.data || (Array.isArray(d) ? d : []);
+      all = all.concat(batch);
+      if (batch.length < 500) break;
+      page++;
+    }
+    all = await enrichWithAiq(all);
+    _custCache = all; _custCacheTime = Date.now();
+    _custFetchInFlight = null;
+    console.log("Customers cached:", all.length, '(AIQ enriched)');
+    return all;
+  })();
+  return _custFetchInFlight;
+}
+
+// Stale-while-revalidate: return cached customers immediately, refresh in background if stale
+function fetchAllCustomersNonBlocking() {
+  if (_custCache) {
+    if (Date.now() - _custCacheTime >= CUST_TTL) {
+      fetchAllCustomers().catch(e => console.error('[cust] bg refresh error:', e.message));
+    }
+    return Promise.resolve(_custCache);
   }
-  // Enrich with Alpine IQ loyalty data (points, tier, opt-in status)
-  all = await enrichWithAiq(all);
-  _custCache = all; _custCacheTime = Date.now();
-  console.log("Customers cached:", all.length, '(AIQ enriched)');
-  return all;
+  return fetchAllCustomers(); // cold start: must wait once
 }
 
 app.get("/api/orders", async(q,s) => {
@@ -755,7 +771,7 @@ app.get("/api/sales-stats", async(q,s) => {
 
     const [orders, customers] = await Promise.all([
       fetchAllOrdersCached(mo, todayStr),
-      fetchAllCustomers()
+      fetchAllCustomersNonBlocking()
     ]);
     const sold = orders.filter(o => o.orderStatus==='sold' && !o.voided && o.completedOn);
 
@@ -2800,6 +2816,9 @@ async function warmCaches() {
   fetchAiqContacts()
     .then(c => console.log('[warmup] Phase 2b done — AIQ loyalty loaded (' + c.length + ' contacts)'))
     .catch(e => console.error('[warmup] Phase 2b error:', e.message));
+  fetchAllCustomers()
+    .then(c => console.log('[warmup] Phase 2c done — customers warmed (' + c.length + ')'))
+    .catch(e => console.error('[warmup] Phase 2c error:', e.message));
 }
 
 (async () => {
