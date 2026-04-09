@@ -53,6 +53,22 @@ export function mkLineSvg(counts, maxCount, n) {
   return s + '</svg>';
 }
 
+// Card touch tip: show on tap, dismiss on next tap anywhere
+function showCardTip(e, t) {
+  e.preventDefault();
+  showBarTip(e, t);
+  setTimeout(function() {
+    function dismiss() {
+      hideBarTip();
+      document.removeEventListener('touchstart', dismiss, true);
+      document.removeEventListener('click', dismiss, true);
+    }
+    document.addEventListener('touchstart', dismiss, true);
+    document.addEventListener('click', dismiss, true);
+  }, 60);
+}
+
 // Attach to window for inline HTML handlers
 window.showBarTip = showBarTip;
 window.hideBarTip = hideBarTip;
+window.showCardTip = showCardTip;
