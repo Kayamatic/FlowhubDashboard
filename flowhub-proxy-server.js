@@ -2750,12 +2750,22 @@ app.post("/api/chat", express.json(), async(req, res) => {
       : (Array.isArray(lastUserMsg?.content) ? (lastUserMsg.content.find(c => c.type === 'text') || {}).text : '') || '';
 
     for (let i = 0; i < 8; i++) {
-      const r = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {"Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01"},
-        body: JSON.stringify({model: "claude-sonnet-4-20250514", max_tokens: 1500, system: sys, tools: TOOLS, messages: msgs})
-      });
-      const d = await r.json();
+      let d;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const r = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {"Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01"},
+          body: JSON.stringify({model: "claude-sonnet-4-20250514", max_tokens: 1500, system: sys, tools: TOOLS, messages: msgs})
+        });
+        d = await r.json();
+        if (d.error && d.error.type === 'overloaded_error' && attempt < 2) {
+          const wait = 1000 * (attempt + 1);
+          console.log(`[ai-chat] overloaded — retrying in ${wait/1000}s (attempt ${attempt+1}/3)`);
+          await new Promise(res => setTimeout(res, wait));
+          continue;
+        }
+        break;
+      }
       if (d.error) return send({error: 'api_error', message: (d.error && d.error.message) || JSON.stringify(d.error)});
 
       if (d.stop_reason === 'end_turn') {
