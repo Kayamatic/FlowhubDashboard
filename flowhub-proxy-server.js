@@ -567,6 +567,13 @@ async function fetchInventory() {
       byName[key].floorQuantity      += p.floorQuantity;
       byName[key].vaultQuantity      += p.vaultQuantity;
       byName[key].otherRoomQuantity  += p.otherRoomQuantity;
+      // Keep most recent createdAt across merged lots — reflects latest batch received
+      if (p.createdAt && (!byName[key].createdAt || p.createdAt > byName[key].createdAt)) {
+        byName[key].createdAt     = p.createdAt;
+        byName[key].invoiceNumber = p.invoiceNumber || byName[key].invoiceNumber;
+        byName[key].manifestId    = p.manifestId    || byName[key].manifestId;
+        byName[key].supplierName  = p.supplierName  || byName[key].supplierName;
+      }
       for (const [room, qty] of Object.entries(p.roomBreakdown || {})) {
         byName[key].roomBreakdown[room] = (byName[key].roomBreakdown[room] || 0) + qty;
       }
@@ -1493,11 +1500,15 @@ async function computeInventorySearch(keyword, includeOutOfStock) {
         vaultQuantity:     parseInt(p.vaultQuantity || 0),
         otherRoomQuantity: parseInt(p.otherRoomQuantity || 0),
         roomBreakdown:     p.roomBreakdown || {},
-        price:             p.preTaxPriceInPennies ? +(p.preTaxPriceInPennies / 100).toFixed(2) : (p.postTaxPriceInPennies ? +(p.postTaxPriceInPennies / 100).toFixed(2) : null)
+        price:             p.preTaxPriceInPennies ? +(p.preTaxPriceInPennies / 100).toFixed(2) : (p.postTaxPriceInPennies ? +(p.postTaxPriceInPennies / 100).toFixed(2) : null),
+        createdAt:         p.createdAt || null,
+        daysSinceAdded:    p.createdAt ? Math.floor((Date.now() - new Date(p.createdAt)) / MS_PER_DAY) : null,
+        supplierName:      p.supplierName || null,
+        invoiceNumber:     p.invoiceNumber || null
       };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
-  return {keyword, inStockCount: products.filter(p => p.quantity > 0).length, totalMatches: products.length, products};
+  return {keyword, inStockCount: products.filter(p => p.totalQuantity > 0).length, totalMatches: products.length, products};
 }
 
 async function computeInventoryVelocity(days) {
@@ -1528,7 +1539,7 @@ async function computeDeadStock(days) {
   const norm = s => { let t = (s||'').trim(); const dash = t.indexOf(' - '); if (dash > 0 && t.indexOf('|') > dash) t = t.slice(dash + 3); return t.toLowerCase().replace(/\s+/g, ' ').trim(); };
   const soldNames = new Set();
   orders.filter(o => o.orderStatus === 'sold' && !o.voided).forEach(o => (o.itemsInCart||[]).forEach(i => { const n = norm(i.productName); if (n) soldNames.add(n); }));
-  const dead = (rawInv.data||[]).filter(p => parseInt(p.quantity||0) > 0 && !soldNames.has(norm(p.productName||p.variantName||''))).map(p => ({name: p.productName||p.variantName||'Unknown', category: p.category||'Other', qty: parseInt(p.quantity||0), price: p.preTaxPriceInPennies ? p.preTaxPriceInPennies/100 : (p.postTaxPriceInPennies ? p.postTaxPriceInPennies/100 : 0)})).sort((a,b) => b.qty-a.qty);
+  const dead = (rawInv.data||[]).filter(p => parseInt(p.quantity||0) > 0 && !soldNames.has(norm(p.productName||p.variantName||''))).map(p => ({name: p.productName||p.variantName||'Unknown', category: p.category||'Other', qty: parseInt(p.quantity||0), price: p.preTaxPriceInPennies ? p.preTaxPriceInPennies/100 : (p.postTaxPriceInPennies ? p.postTaxPriceInPennies/100 : 0), createdAt: p.createdAt||null, daysSinceAdded: p.createdAt ? Math.floor((Date.now()-new Date(p.createdAt))/MS_PER_DAY) : null, supplierName: p.supplierName||null})).sort((a,b) => b.qty-a.qty);
   return {windowDays: days||30, startDate: start, endDate: end, deadStockCount: dead.length, estimatedValue: Math.round(dead.reduce((s,p) => s+p.qty*p.price, 0)), products: dead.slice(0,30)};
 }
 
@@ -2432,7 +2443,7 @@ const TOOLS = [
   },
   {
     name: 'get_inventory_search',
-    description: 'Search current inventory by keyword matched against product name, brand, or category. Returns matching products with totalQuantity (floor + vault + all rooms), floorQuantity (Sales Floor only), vaultQuantity, and price. Use for questions like "list all 617 branded 3.5s", "how many Blue Dream do we have", "what strains are in stock", "show me all concentrates", "how much X is left", "what\'s in the vault", or any question asking about specific products or brands currently in stock. Always report totalQuantity as the primary number; break out floor vs vault when asked.',
+    description: 'Search current inventory by keyword matched against product name, brand, or category. Returns matching products with totalQuantity (floor + vault + all rooms), floorQuantity (Sales Floor only), vaultQuantity, price, createdAt (date item was added to Flowhub), daysSinceAdded, and supplierName. Use for questions like "list all 617 branded 3.5s", "how many Blue Dream do we have", "what strains are in stock", "show me all concentrates", "how much X is left", "what\'s in the vault", or any question asking about specific products or brands currently in stock. Always report totalQuantity as the primary number; break out floor vs vault when asked.',
     input_schema: {
       type: 'object',
       properties: {
@@ -2448,7 +2459,7 @@ const TOOLS = [
   },
   {
     name: 'get_dead_stock',
-    description: 'Finds products that are currently in stock but had zero sales in a given window. Use for questions about dead stock, slow movers, products that aren\'t selling, stale inventory, or items to consider returning or discounting.',
+    description: 'Finds products that are currently in stock but had zero sales in a given window. Returns createdAt (date added to Flowhub), daysSinceAdded, and supplierName for each product — use these to distinguish genuinely stale stock from recently received inventory. Use for questions about dead stock, slow movers, products that aren\'t selling, stale inventory, or items to consider returning or discounting.',
     input_schema: {type: 'object', properties: {days: {type: 'number', description: 'Lookback window in days. A product is "dead" if it had no sales in this period. Default: 30.'}}}
   },
   {
