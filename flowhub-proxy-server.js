@@ -644,7 +644,7 @@ function _evictDay(dateStr) {
 }
 
 async function fetchAllOrdersCached(start, end) {
-  if (isDemo()) return demoFetchOrders(start, end);
+  if (isDemo()) { demoWarmToday(); return demoFetchOrders(start, end); }
   const today = _estToday(), yest = _estYest();
   const histEnd = end < today ? end : yest; // non-today boundary for persistent cache
   const fetches = [];
