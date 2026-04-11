@@ -329,6 +329,9 @@ export async function init() {
 
     var sessInfo  = await sessP;
     state.isDemo  = sessInfo.demo || false;
+    state.userRole = sessInfo.role || 'store_manager';
+    var adminBtn = document.getElementById('adminBtn');
+    if (adminBtn) adminBtn.style.display = state.userRole === 'owner' ? 'inline-block' : 'none';
     var rawP = await inventoryP;
     var custStats = await custStatsP;
     var products  = rawP.data || (Array.isArray(rawP) ? rawP : []);
