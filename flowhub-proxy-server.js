@@ -79,12 +79,25 @@ db.exec(`
     role        TEXT DEFAULT 'store_manager',
     PRIMARY KEY (username, tenant_id)
   );
+  CREATE TABLE IF NOT EXISTS users (
+    username    TEXT PRIMARY KEY,
+    global_role TEXT DEFAULT 'store_manager',
+    created_at  INTEGER DEFAULT (strftime('%s','now'))
+  );
 `);
 
 // Seed the native 617THC tenant from .env (idempotent — safe to run every startup)
 db.prepare(`INSERT OR IGNORE INTO tenants (tenant_id, name, api_key, client_id, location_id)
             VALUES (?, ?, ?, ?, ?)`)
   .run('617thc', '617THC', process.env.FLOWHUB_API_KEY||'', process.env.FLOWHUB_CLIENT_ID||'', process.env.FLOWHUB_LOCATION_ID||'');
+
+// Migrate existing users.json users into the users table as 'owner' (idempotent)
+try {
+  const _seedUser = db.prepare('INSERT OR IGNORE INTO users (username, global_role) VALUES (?, ?)');
+  const existingUsers = (() => { try { return JSON.parse(require('fs').readFileSync(__dirname + '/users.json', 'utf8')); } catch { return {}; } })();
+  Object.keys(existingUsers).filter(u => !['617Demo'].includes(u)).forEach(u => _seedUser.run(u, 'owner'));
+  if (process.env.DASH_USER) _seedUser.run(process.env.DASH_USER, 'owner');
+} catch(e) { console.error('[users] migration error:', e.message); }
 
 // ── Per-tenant in-memory state (new tenants only; 617thc uses existing global state) ──
 const _tenantStates = new Map();
@@ -144,16 +157,48 @@ function getTenantCredentials(tenantId) {
   };
 }
 
-// Returns list of tenants a user can access, with roles
+// ── Role definitions ──────────────────────────────────────────────────────────
+// owner        — all stores, full admin access (add tenants, manage users)
+// multi_store  — explicitly assigned stores only, cross-store comparison view
+// store_manager — single assigned store only, no switching
+
+function getUserRole(username) {
+  if (!username) return 'store_manager';
+  if (DEMO_USERS && DEMO_USERS.has(username)) return 'owner';
+  const row = db.prepare('SELECT global_role FROM users WHERE username = ?').get(username);
+  // Fall back to 'owner' for unmapped users (preserves behavior for legacy accounts)
+  return row ? row.global_role : 'owner';
+}
+
+// Returns list of tenants a user can access based on their role
 function getUserTenants(username) {
   if (!username) return [];
-  if (DEMO_USERS && DEMO_USERS.has && DEMO_USERS.has(username)) return [{ tenant_id: 'demo', name: 'Demo Store', role: 'owner' }];
+  if (DEMO_USERS && DEMO_USERS.has(username)) return [{ tenant_id: 'demo', name: 'Demo Store', role: 'owner' }];
+
+  const globalRole = getUserRole(username);
+
+  if (globalRole === 'owner') {
+    // Owner sees every active tenant automatically — no explicit mapping needed
+    const all = db.prepare('SELECT tenant_id, name FROM tenants WHERE active = 1 ORDER BY created_at ASC').all();
+    if (!all.length) return [{ tenant_id: '617thc', name: '617THC', role: 'owner' }];
+    return all.map(t => ({ ...t, role: 'owner' }));
+  }
+
+  // multi_store and store_manager: constrained to explicit user_tenants rows
   const rows = db.prepare(`SELECT t.tenant_id, t.name, ut.role
     FROM user_tenants ut JOIN tenants t ON t.tenant_id = ut.tenant_id
     WHERE ut.username = ? AND t.active = 1 ORDER BY t.created_at ASC`).all(username);
-  // Fall back: no explicit mapping → native 617thc with owner role
-  if (!rows.length) return [{ tenant_id: '617thc', name: '617THC', role: 'owner' }];
-  return rows;
+
+  if (!rows.length) return [{ tenant_id: '617thc', name: '617THC', role: globalRole }];
+
+  // store_manager gets exactly one store — the first assigned
+  return globalRole === 'store_manager' ? [rows[0]] : rows;
+}
+
+// Middleware: blocks non-owners from admin endpoints
+function requireOwner(req, res, next) {
+  if (req.userRole !== 'owner') return res.status(403).json({ error: 'Owner access required' });
+  next();
 }
 
 // Demo DB helpers — separate caches for demo sessions
@@ -639,6 +684,186 @@ if (LEGACY_PASS || fs.existsSync(USERS_FILE)) {
     return { ok: r.ok };
   }
 
+  // GET /admin — owner-only management page
+  app.get('/admin', function(req, res) {
+    const cookies = parseCookies(req);
+    const sess = cookies.dash_sess ? _sessGet.get(cookies.dash_sess, Date.now()) : null;
+    if (!sess) return res.redirect('/login');
+    if (getUserRole(sess.user) !== 'owner') return res.status(403).send('Access denied');
+    res.send(`<!DOCTYPE html><html><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Admin · Diggory</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0d0d0d;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;color:#f0e8d8;padding:24px 16px;min-height:100vh}
+.top{display:flex;align-items:center;justify-content:space-between;margin-bottom:32px;max-width:900px}
+.logo{font-size:22px;font-weight:900;color:#f0e8d8}.logo span{color:#c8922a}
+.nav a{color:#888;font-size:13px;text-decoration:none;margin-left:20px}.nav a:hover{color:#c8922a}
+h2{font-size:13px;text-transform:uppercase;letter-spacing:.12em;color:#888;margin-bottom:14px;margin-top:28px}
+.card{background:#161616;border:1px solid #222;border-radius:8px;padding:20px;max-width:900px;margin-bottom:16px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;color:#666;font-size:11px;text-transform:uppercase;letter-spacing:.08em;padding:6px 10px;border-bottom:1px solid #222}
+td{padding:9px 10px;border-bottom:1px solid #1a1a1a;color:#ccc;vertical-align:middle}
+tr:last-child td{border-bottom:none}
+.badge{display:inline-block;font-size:10px;font-weight:700;padding:2px 7px;border-radius:3px;text-transform:uppercase;letter-spacing:.06em}
+.badge.owner{background:#2a1f0a;color:#c8922a;border:1px solid #3a2f1a}
+.badge.multi_store{background:#0a1a2a;color:#5ab0e8;border:1px solid #1a3a5a}
+.badge.store_manager{background:#1a1a1a;color:#888;border:1px solid #333}
+.badge.active{background:#0a2a0a;color:#60c060;border:1px solid #1a4a1a}
+input,select{background:#1e1e1e;border:1px solid #333;color:#f0e8d8;padding:8px 10px;border-radius:4px;font-size:13px;font-family:inherit;outline:none;width:100%}
+input:focus,select:focus{border-color:#c8922a}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px}
+.field{flex:1;min-width:140px}.field label{display:block;font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px}
+.btn{background:#c8922a;border:none;color:#000;padding:8px 16px;border-radius:4px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;font-family:inherit}
+.btn:active{background:#b07d20}
+.btn.del{background:#2a0a0a;color:#e06060;border:1px solid #5a1a1a}
+.btn.del:hover{background:#3a1a1a}
+.msg{font-size:12px;padding:8px 12px;border-radius:4px;margin-top:8px;display:none}
+.msg.ok{background:#0a2a0a;color:#60c060;border:1px solid #1a5a1a}
+.msg.err{background:#2a0a0a;color:#e06060;border:1px solid #5a1a1a}
+</style></head><body>
+<div class="top">
+  <div class="logo">Diggory <span>Admin</span></div>
+  <div class="nav"><a href="/dashboard.html">← Dashboard</a><a href="/logout">Sign out</a></div>
+</div>
+
+<h2>Users</h2>
+<div class="card">
+  <table id="usersTable">
+    <thead><tr><th>Username</th><th>Role</th><th>Stores</th><th></th></tr></thead>
+    <tbody id="usersTbody"><tr><td colspan="4" style="color:#555">Loading…</td></tr></tbody>
+  </table>
+</div>
+
+<h2>Add User</h2>
+<div class="card">
+  <div class="row">
+    <div class="field"><label>Email / Username</label><input id="newUser" type="email" placeholder="user@example.com"></div>
+    <div class="field"><label>Password</label><input id="newPass" type="password" placeholder="min 8 characters"></div>
+    <div class="field" style="max-width:180px"><label>Role</label>
+      <select id="newRole">
+        <option value="store_manager">Store Manager</option>
+        <option value="multi_store">Multi-Store</option>
+        <option value="owner">Owner</option>
+      </select>
+    </div>
+    <button class="btn" onclick="addUser()">Add User</button>
+  </div>
+  <div id="addMsg" class="msg"></div>
+</div>
+
+<h2>Stores</h2>
+<div class="card">
+  <table id="storesTable">
+    <thead><tr><th>Store ID</th><th>Name</th><th>Location ID</th><th>Status</th><th>Users</th></tr></thead>
+    <tbody id="storesTbody"><tr><td colspan="5" style="color:#555">Loading…</td></tr></tbody>
+  </table>
+</div>
+
+<h2>Add Store</h2>
+<div class="card">
+  <div class="row">
+    <div class="field"><label>Store ID (slug)</label><input id="sTid" placeholder="store_abc" pattern="[a-z0-9_-]+"></div>
+    <div class="field"><label>Display Name</label><input id="sTname" placeholder="ABC Dispensary — Main St"></div>
+  </div>
+  <div class="row">
+    <div class="field"><label>Flowhub API Key</label><input id="sTkey" placeholder="api key"></div>
+    <div class="field"><label>Client ID</label><input id="sTcid" placeholder="client id"></div>
+    <div class="field"><label>Location ID</label><input id="sTloc" placeholder="location id"></div>
+  </div>
+  <div class="row">
+    <button class="btn" onclick="addStore()">Add Store</button>
+  </div>
+  <div id="storeMsg" class="msg"></div>
+</div>
+
+<h2>Assign User to Store</h2>
+<div class="card">
+  <div class="row">
+    <div class="field"><label>Username</label><input id="auUser" placeholder="user@example.com"></div>
+    <div class="field"><label>Store ID</label><input id="auTenant" placeholder="store_abc"></div>
+    <div class="field" style="max-width:180px"><label>Store Role</label>
+      <select id="auRole"><option value="store_manager">Store Manager</option><option value="multi_store">Multi-Store</option><option value="owner">Owner</option></select>
+    </div>
+    <button class="btn" onclick="assignUser()">Assign</button>
+  </div>
+  <div id="assignMsg" class="msg"></div>
+</div>
+
+<script>
+function showMsg(id, text, ok) {
+  const el = document.getElementById(id);
+  el.textContent = text; el.className = 'msg ' + (ok ? 'ok' : 'err'); el.style.display = 'block';
+  setTimeout(() => { el.style.display = 'none'; }, 4000);
+}
+async function api(method, path, body) {
+  const r = await fetch(path, { method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+  return r.json();
+}
+
+async function loadUsers() {
+  const d = await api('GET', '/api/admin/users');
+  const tb = document.getElementById('usersTbody');
+  if (!d.users || !d.users.length) { tb.innerHTML = '<tr><td colspan="4" style="color:#555">No users yet.</td></tr>'; return; }
+  tb.innerHTML = d.users.map(u => \`<tr>
+    <td>\${u.username}</td>
+    <td><span class="badge \${u.global_role}">\${u.global_role.replace('_',' ')}</span></td>
+    <td style="color:#666;font-size:12px">\${(u.tenants||[]).map(t=>t.tenant_id).join(', ') || '—'}</td>
+    <td><button class="btn del" onclick="deleteUser('\${u.username}')">Delete</button></td>
+  </tr>\`).join('');
+}
+
+async function loadStores() {
+  const d = await api('GET', '/api/admin/tenants');
+  const tb = document.getElementById('storesTbody');
+  if (!d.tenants || !d.tenants.length) { tb.innerHTML = '<tr><td colspan="5" style="color:#555">No stores.</td></tr>'; return; }
+  tb.innerHTML = d.tenants.map(t => \`<tr>
+    <td style="font-family:monospace;font-size:12px">\${t.tenant_id}</td>
+    <td>\${t.name}</td>
+    <td style="font-family:monospace;font-size:11px;color:#666">\${t.location_id||'—'}</td>
+    <td><span class="badge active">\${t.active ? 'Active' : 'Inactive'}</span></td>
+    <td style="color:#666;font-size:12px">\${(t.users||[]).map(u=>u.username).join(', ')||'—'}</td>
+  </tr>\`).join('');
+}
+
+async function addUser() {
+  const u = document.getElementById('newUser').value.trim();
+  const p = document.getElementById('newPass').value;
+  const r = document.getElementById('newRole').value;
+  if (!u || !p) return showMsg('addMsg', 'Email and password required', false);
+  const d = await api('POST', '/api/admin/user', { username: u, password: p, global_role: r });
+  if (d.ok) { showMsg('addMsg', 'User created: ' + u, true); document.getElementById('newUser').value = ''; document.getElementById('newPass').value = ''; loadUsers(); }
+  else showMsg('addMsg', d.error || 'Error', false);
+}
+
+async function deleteUser(username) {
+  if (!confirm('Delete user ' + username + '? This cannot be undone.')) return;
+  const d = await api('DELETE', '/api/admin/user/' + encodeURIComponent(username));
+  if (d.ok) { showMsg('addMsg', 'Deleted: ' + username, true); loadUsers(); }
+  else showMsg('addMsg', d.error || 'Error', false);
+}
+
+async function addStore() {
+  const body = { tenant_id: document.getElementById('sTid').value.trim(), name: document.getElementById('sTname').value.trim(), api_key: document.getElementById('sTkey').value.trim(), client_id: document.getElementById('sTcid').value.trim(), location_id: document.getElementById('sTloc').value.trim() };
+  if (!body.tenant_id || !body.name || !body.api_key || !body.client_id || !body.location_id) return showMsg('storeMsg', 'All fields required', false);
+  const d = await api('POST', '/api/admin/tenant', body);
+  if (d.ok) { showMsg('storeMsg', 'Store added: ' + body.tenant_id, true); ['sTid','sTname','sTkey','sTcid','sTloc'].forEach(id => document.getElementById(id).value = ''); loadStores(); }
+  else showMsg('storeMsg', d.error || 'Error', false);
+}
+
+async function assignUser() {
+  const body = { username: document.getElementById('auUser').value.trim(), tenant_id: document.getElementById('auTenant').value.trim(), role: document.getElementById('auRole').value };
+  if (!body.username || !body.tenant_id) return showMsg('assignMsg', 'Username and store ID required', false);
+  const d = await api('POST', '/api/admin/user-tenant', body);
+  if (d.ok) { showMsg('assignMsg', 'Assigned', true); loadUsers(); loadStores(); }
+  else showMsg('assignMsg', d.error || 'Error', false);
+}
+
+loadUsers(); loadStores();
+</script>
+</body></html>`);
+  });
+
   // GET /forgot-password
   app.get('/forgot-password', function(req, res) {
     res.send(`<!DOCTYPE html><html><head>
@@ -754,12 +979,11 @@ ${req.query.err === 'short' ? '<div class="err">Password must be at least 8 char
     if (sess) {
       req.dashUser = sess.user;
       req.demoMode = sess.demo === 1 || sess.demo === true || false;
-      // Resolve tenantId: first tenant in user's access list (store-switcher will override later)
+      req.userRole = getUserRole(sess.user);
       const userTenants = getUserTenants(sess.user);
       req.tenantId = (userTenants[0] && userTenants[0].tenant_id) || '617thc';
       req.userTenants = userTenants;
-      // Wrap in AsyncLocalStorage so all downstream fetch functions detect demo mode
-      return reqCtx.run({ demo: req.demoMode, tenantId: req.tenantId }, next);
+      return reqCtx.run({ demo: req.demoMode, tenantId: req.tenantId, role: req.userRole }, next);
     }
     // API calls get JSON 401 (not an HTML redirect) so the client can handle it gracefully
     if (req.path.startsWith('/api/')) {
@@ -844,7 +1068,7 @@ async function fetchInventory() {
   return _invCache;
 }
 app.get("/api/session-info", (q,s) => {
-  s.json({ demo: q.demoMode || false, user: q.dashUser || null, tenantId: q.tenantId || '617thc', tenants: q.userTenants || [] });
+  s.json({ demo: q.demoMode || false, user: q.dashUser || null, tenantId: q.tenantId || '617thc', tenants: q.userTenants || [], role: q.userRole || 'store_manager' });
 });
 app.get("/api/inventory", async(q,s) => {
   try { s.setHeader('Cache-Control','private,max-age=300'); s.json(await fetchInventory()); }
@@ -1073,7 +1297,7 @@ async function fetchAllCustomersForTenant(tenantId) {
 }
 
 // ── Admin endpoints — tenant management (authenticated, owner-only for now) ───
-app.get('/api/admin/tenants', (req, res) => {
+app.get('/api/admin/tenants', requireOwner, (req, res) => {
   try {
     const tenants = db.prepare('SELECT tenant_id, name, location_id, timezone, active, created_at FROM tenants ORDER BY created_at ASC').all();
     const userTenantMap = {};
@@ -1083,7 +1307,7 @@ app.get('/api/admin/tenants', (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/api/admin/tenant', express.json(), (req, res) => {
+app.post('/api/admin/tenant', requireOwner, express.json(), (req, res) => {
   try {
     const { tenant_id, name, api_key, client_id, location_id, timezone } = req.body || {};
     if (!tenant_id || !name || !api_key || !client_id || !location_id)
@@ -1098,7 +1322,7 @@ app.post('/api/admin/tenant', express.json(), (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/api/admin/user-tenant', express.json(), (req, res) => {
+app.post('/api/admin/user-tenant', requireOwner, express.json(), (req, res) => {
   try {
     const { username, tenant_id, role } = req.body || {};
     if (!username || !tenant_id) return res.status(400).json({ error: 'Required: username, tenant_id' });
@@ -1110,10 +1334,68 @@ app.post('/api/admin/user-tenant', express.json(), (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// ── Current user's tenant list (powers future store-switcher) ─────────────────
+// ── Current user's tenant list + role (powers store-switcher and UI gating) ───
 app.get('/api/tenants', (req, res) => {
   try {
-    res.json({ tenants: req.userTenants || [], activeTenant: req.tenantId });
+    res.json({ tenants: req.userTenants || [], activeTenant: req.tenantId, role: req.userRole || 'store_manager' });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── User management (owner only) ──────────────────────────────────────────────
+app.get('/api/admin/users', requireOwner, (req, res) => {
+  try {
+    const users = db.prepare('SELECT username, global_role, created_at FROM users ORDER BY created_at ASC').all();
+    const tenantMap = {};
+    db.prepare('SELECT username, tenant_id, role FROM user_tenants').all()
+      .forEach(r => { if (!tenantMap[r.username]) tenantMap[r.username] = []; tenantMap[r.username].push({ tenant_id: r.tenant_id, role: r.role }); });
+    res.json({ users: users.map(u => ({ ...u, tenants: tenantMap[u.username] || [] })) });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/admin/user', requireOwner, express.json(), async (req, res) => {
+  try {
+    const { username, password, global_role } = req.body || {};
+    if (!username || !password) return res.status(400).json({ error: 'Required: username, password' });
+    const validRoles = ['owner', 'multi_store', 'store_manager'];
+    const role = validRoles.includes(global_role) ? global_role : 'store_manager';
+    const hash = await bcrypt.hash(password, 12);
+    // Write to users.json
+    const users = loadUsers();
+    users[username] = hash;
+    fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
+    // Write to users table
+    db.prepare('INSERT OR REPLACE INTO users (username, global_role) VALUES (?, ?)').run(username, role);
+    console.log('[admin] user created:', username, role);
+    res.json({ ok: true, username, global_role: role });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.patch('/api/admin/user/:username', requireOwner, express.json(), (req, res) => {
+  try {
+    const { username } = req.params;
+    const { global_role } = req.body || {};
+    const validRoles = ['owner', 'multi_store', 'store_manager'];
+    if (!validRoles.includes(global_role)) return res.status(400).json({ error: 'Role must be: owner, multi_store, or store_manager' });
+    if (!db.prepare('SELECT 1 FROM users WHERE username = ?').get(username)) return res.status(404).json({ error: 'User not found' });
+    db.prepare('UPDATE users SET global_role = ? WHERE username = ?').run(global_role, username);
+    res.json({ ok: true, username, global_role });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/admin/user/:username', requireOwner, (req, res) => {
+  try {
+    const { username } = req.params;
+    if (username === req.dashUser) return res.status(400).json({ error: 'Cannot delete your own account' });
+    // Remove from users.json
+    const users = loadUsers();
+    delete users[username];
+    fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
+    // Remove from DB tables
+    db.prepare('DELETE FROM users WHERE username = ?').run(username);
+    db.prepare('DELETE FROM user_tenants WHERE username = ?').run(username);
+    db.prepare('DELETE FROM sessions WHERE user = ?').run(username);
+    console.log('[admin] user deleted:', username);
+    res.json({ ok: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
