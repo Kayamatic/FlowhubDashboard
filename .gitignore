@@ -21,3 +21,4 @@ access.log
 node.log
 tunnel.log
 sample output/
+stores/

@@ -53,6 +53,102 @@ db.exec(`
   );
 `);
 
+// ── Multi-tenant schema ───────────────────────────────────────────────────────
+db.exec(`
+  CREATE TABLE IF NOT EXISTS tenants (
+    tenant_id   TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    api_key     TEXT,
+    client_id   TEXT,
+    location_id TEXT,
+    timezone    TEXT DEFAULT 'America/New_York',
+    norm_rules  TEXT DEFAULT '{}',
+    active      INTEGER DEFAULT 1,
+    created_at  INTEGER DEFAULT (strftime('%s','now'))
+  );
+  CREATE TABLE IF NOT EXISTS user_tenants (
+    username    TEXT NOT NULL,
+    tenant_id   TEXT NOT NULL,
+    role        TEXT DEFAULT 'store_manager',
+    PRIMARY KEY (username, tenant_id)
+  );
+`);
+
+// Seed the native 617THC tenant from .env (idempotent — safe to run every startup)
+db.prepare(`INSERT OR IGNORE INTO tenants (tenant_id, name, api_key, client_id, location_id)
+            VALUES (?, ?, ?, ?, ?)`)
+  .run('617thc', '617THC', process.env.FLOWHUB_API_KEY||'', process.env.FLOWHUB_CLIENT_ID||'', process.env.FLOWHUB_LOCATION_ID||'');
+
+// ── Per-tenant in-memory state (new tenants only; 617thc uses existing global state) ──
+const _tenantStates = new Map();
+
+function getTenantState(tenantId) {
+  if (tenantId === '617thc') return null; // 617thc uses existing global caches + flowhub.db
+  if (_tenantStates.has(tenantId)) return _tenantStates.get(tenantId);
+
+  const storeDir = __dirname + '/stores';
+  if (!fs.existsSync(storeDir)) fs.mkdirSync(storeDir);
+  const storeDb = new Database(storeDir + '/' + tenantId + '.db');
+  storeDb.pragma('journal_mode = WAL');
+  storeDb.pragma('synchronous = NORMAL');
+  storeDb.exec(`
+    CREATE TABLE IF NOT EXISTS orders (
+      order_id TEXT PRIMARY KEY,
+      date     TEXT NOT NULL,
+      data     TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_orders_date ON orders(date);
+    CREATE TABLE IF NOT EXISTS cache_meta (
+      key   TEXT PRIMARY KEY,
+      value TEXT
+    );
+  `);
+
+  const _getMeta = storeDb.prepare('SELECT value FROM cache_meta WHERE key = ?').pluck();
+  const state = {
+    db:           storeDb,
+    invCache:     null, invCacheTime:  0,
+    custCache:    null, custCacheTime: 0,
+    custInFlight: null,
+    statsCache:   null, statsCacheTime: 0,
+    statsInFlight: null,
+    ordMin:       _getMeta.get('ordMin') || null,
+    ordMax:       _getMeta.get('ordMax') || null,
+    todayTs:      0
+  };
+  _tenantStates.set(tenantId, state);
+  console.log('[tenant] initialized state for:', tenantId);
+  return state;
+}
+
+// Initialize state for all active non-native tenants on startup
+db.prepare("SELECT tenant_id FROM tenants WHERE tenant_id != '617thc' AND active = 1").all()
+  .forEach(r => getTenantState(r.tenant_id));
+
+function getTenantCredentials(tenantId) {
+  if (tenantId === '617thc') {
+    return { hdrs: {"clientId": process.env.FLOWHUB_CLIENT_ID, "key": process.env.FLOWHUB_API_KEY, "Accept": "application/json"}, loc: process.env.FLOWHUB_LOCATION_ID };
+  }
+  const row = db.prepare('SELECT api_key, client_id, location_id FROM tenants WHERE tenant_id = ? AND active = 1').get(tenantId);
+  if (!row) throw new Error('Unknown or inactive tenant: ' + tenantId);
+  return {
+    hdrs: { clientId: row.client_id, key: row.api_key, Accept: 'application/json' },
+    loc:  row.location_id
+  };
+}
+
+// Returns list of tenants a user can access, with roles
+function getUserTenants(username) {
+  if (!username) return [];
+  if (DEMO_USERS && DEMO_USERS.has && DEMO_USERS.has(username)) return [{ tenant_id: 'demo', name: 'Demo Store', role: 'owner' }];
+  const rows = db.prepare(`SELECT t.tenant_id, t.name, ut.role
+    FROM user_tenants ut JOIN tenants t ON t.tenant_id = ut.tenant_id
+    WHERE ut.username = ? AND t.active = 1 ORDER BY t.created_at ASC`).all(username);
+  // Fall back: no explicit mapping → native 617thc with owner role
+  if (!rows.length) return [{ tenant_id: '617thc', name: '617THC', role: 'owner' }];
+  return rows;
+}
+
 // Demo DB helpers — separate caches for demo sessions
 let _demoInvCache = null, _demoInvCacheTime = 0;
 let _demoCustCache = null, _demoCustCacheTime = 0;
@@ -499,8 +595,12 @@ if (LEGACY_PASS || fs.existsSync(USERS_FILE)) {
     if (sess) {
       req.dashUser = sess.user;
       req.demoMode = sess.demo === 1 || sess.demo === true || false;
+      // Resolve tenantId: first tenant in user's access list (store-switcher will override later)
+      const userTenants = getUserTenants(sess.user);
+      req.tenantId = (userTenants[0] && userTenants[0].tenant_id) || '617thc';
+      req.userTenants = userTenants;
       // Wrap in AsyncLocalStorage so all downstream fetch functions detect demo mode
-      return reqCtx.run({ demo: req.demoMode }, next);
+      return reqCtx.run({ demo: req.demoMode, tenantId: req.tenantId }, next);
     }
     // API calls get JSON 401 (not an HTML redirect) so the client can handle it gracefully
     if (req.path.startsWith('/api/')) {
@@ -585,7 +685,7 @@ async function fetchInventory() {
   return _invCache;
 }
 app.get("/api/session-info", (q,s) => {
-  s.json({ demo: q.demoMode || false, user: q.dashUser || null });
+  s.json({ demo: q.demoMode || false, user: q.dashUser || null, tenantId: q.tenantId || '617thc', tenants: q.userTenants || [] });
 });
 app.get("/api/inventory", async(q,s) => {
   try { s.setHeader('Cache-Control','private,max-age=300'); s.json(await fetchInventory()); }
@@ -750,6 +850,113 @@ function fetchAllCustomersNonBlocking() {
   }
   return fetchAllCustomers(); // cold start: must wait once
 }
+
+// ── Tenant-aware fetch wrappers (used by multi-tenant endpoints) ──────────────
+// These wrap the existing single-tenant fetchers. When tenantId === '617thc'
+// they call the existing global functions unchanged. For new tenants they use
+// per-tenant credentials and the tenant's isolated SQLite store.
+
+async function fetchInventoryForTenant(tenantId) {
+  if (tenantId === '617thc') return fetchInventory();
+  const ts = getTenantState(tenantId);
+  if (ts.invCache && Date.now() - ts.invCacheTime < INV_TTL) return ts.invCache;
+  const { hdrs, loc } = getTenantCredentials(tenantId);
+  const url = `https://api.flowhub.co/v1/inventoryAnalyticsByRooms?locationId=${loc}&pageSize=1000&page=1`;
+  const r = await fetch(url, { headers: hdrs });
+  const raw = await r.json();
+  const data = raw.data || (Array.isArray(raw) ? raw : []);
+  ts.invCache = { data }; ts.invCacheTime = Date.now();
+  return ts.invCache;
+}
+
+async function fetchAllOrdersForTenant(start, end, tenantId) {
+  if (tenantId === '617thc') return fetchAllOrders(start, end);
+  const { hdrs, loc } = getTenantCredentials(tenantId);
+  const endPlusOne = new Date(new Date(end+'T12:00:00Z').getTime()+MS_PER_DAY).toISOString().slice(0,10);
+  const base = `https://api.flowhub.co/v1/orders/findByLocationId/${loc}?startDate=${start}&endDate=${endPlusOne}&pageSize=1000`;
+  let all = [], page = 1, total = Infinity;
+  while (all.length < total) {
+    const r = await fetch(base + '&page=' + page, { headers: hdrs });
+    const d = await r.json();
+    const orders = d.data || d.orders || (Array.isArray(d) ? d : []);
+    if (!orders.length) break;
+    all = all.concat(orders);
+    total = d.total || d.totalCount || all.length;
+    if (all.length >= total || orders.length < 1000) break;
+    page++;
+    await new Promise(r => setTimeout(r, 200)); // rate-limit courtesy pause
+  }
+  return all;
+}
+
+async function fetchAllCustomersForTenant(tenantId) {
+  if (tenantId === '617thc') return fetchAllCustomers();
+  const ts = getTenantState(tenantId);
+  if (ts.custCache && Date.now() - ts.custCacheTime < CUST_TTL) return ts.custCache;
+  if (ts.custInFlight) return ts.custInFlight;
+  ts.custInFlight = (async () => {
+    const { hdrs, loc } = getTenantCredentials(tenantId);
+    let all = [], page = 1;
+    while (true) {
+      const r = await fetch(`https://api.flowhub.co/v1/customers/findByLocationId/${loc}?pageSize=1000&page=${page}`, { headers: hdrs });
+      const d = await r.json();
+      const customers = d.data || (Array.isArray(d) ? d : []);
+      if (!customers.length) break;
+      all = all.concat(customers);
+      if (customers.length < 1000) break;
+      page++;
+      await new Promise(r => setTimeout(r, 200));
+    }
+    ts.custCache = all; ts.custCacheTime = Date.now();
+    return all;
+  })();
+  try { return await ts.custInFlight; } finally { ts.custInFlight = null; }
+}
+
+// ── Admin endpoints — tenant management (authenticated, owner-only for now) ───
+app.get('/api/admin/tenants', (req, res) => {
+  try {
+    const tenants = db.prepare('SELECT tenant_id, name, location_id, timezone, active, created_at FROM tenants ORDER BY created_at ASC').all();
+    const userTenantMap = {};
+    db.prepare('SELECT username, tenant_id, role FROM user_tenants').all()
+      .forEach(r => { if (!userTenantMap[r.tenant_id]) userTenantMap[r.tenant_id] = []; userTenantMap[r.tenant_id].push({username: r.username, role: r.role}); });
+    res.json({ tenants: tenants.map(t => ({ ...t, users: userTenantMap[t.tenant_id] || [] })) });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/admin/tenant', express.json(), (req, res) => {
+  try {
+    const { tenant_id, name, api_key, client_id, location_id, timezone } = req.body || {};
+    if (!tenant_id || !name || !api_key || !client_id || !location_id)
+      return res.status(400).json({ error: 'Required: tenant_id, name, api_key, client_id, location_id' });
+    if (!/^[a-z0-9_-]+$/.test(tenant_id))
+      return res.status(400).json({ error: 'tenant_id must be lowercase alphanumeric + hyphens/underscores only' });
+    db.prepare('INSERT OR REPLACE INTO tenants (tenant_id, name, api_key, client_id, location_id, timezone) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(tenant_id, name, api_key, client_id, location_id, timezone || 'America/New_York');
+    getTenantState(tenant_id); // initialize the store DB immediately
+    console.log('[tenant] added:', tenant_id, name);
+    res.json({ ok: true, tenant_id });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/admin/user-tenant', express.json(), (req, res) => {
+  try {
+    const { username, tenant_id, role } = req.body || {};
+    if (!username || !tenant_id) return res.status(400).json({ error: 'Required: username, tenant_id' });
+    const tenant = db.prepare('SELECT tenant_id FROM tenants WHERE tenant_id = ?').get(tenant_id);
+    if (!tenant) return res.status(404).json({ error: 'Tenant not found: ' + tenant_id });
+    db.prepare('INSERT OR REPLACE INTO user_tenants (username, tenant_id, role) VALUES (?, ?, ?)')
+      .run(username, tenant_id, role || 'store_manager');
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Current user's tenant list (powers future store-switcher) ─────────────────
+app.get('/api/tenants', (req, res) => {
+  try {
+    res.json({ tenants: req.userTenants || [], activeTenant: req.tenantId });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
 
 app.get("/api/orders", async(q,s) => {
   try {
