@@ -22,3 +22,9 @@ node.log
 tunnel.log
 sample output/
 stores/
+logos/*.png
+logos/*.jpg
+logos/*.jpeg
+logos/*.gif
+logos/*.webp
+logos/*.svg

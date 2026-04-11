@@ -332,6 +332,34 @@ export async function init() {
     state.userRole = sessInfo.role || 'store_manager';
     var adminBtn = document.getElementById('adminBtn');
     if (adminBtn) adminBtn.style.display = state.userRole === 'owner' ? 'inline-block' : 'none';
+
+    // ── Per-tenant store logo ─────────────────────────────────────────────────
+    // When a tenant has uploaded a custom logo, swap out the default SVG for it
+    // in both desktop header and mobile logo bar.
+    (function applyStoreLogo(logoUrl) {
+      var ids = [
+        { sep: 'storeLogoSep',    img: 'storeLogoImg',    svg: 'storeLogoSvg'    },
+        { sep: 'mobStoreLogoSep', img: 'mobStoreLogoImg', svg: 'mobStoreLogoSvg' }
+      ];
+      ids.forEach(function(pair) {
+        var sep = document.getElementById(pair.sep);
+        var img = document.getElementById(pair.img);
+        var svg = document.getElementById(pair.svg);
+        if (!img) return;
+        if (logoUrl) {
+          img.src = logoUrl;
+          img.style.display = 'inline-block';
+          if (sep) sep.style.display = 'inline';
+          if (svg) svg.style.display = 'none';
+        } else {
+          img.src = '';
+          img.style.display = 'none';
+          if (sep) sep.style.display = 'none';
+          if (svg) svg.style.display = 'inline';
+        }
+      });
+    })(sessInfo.logoUrl || null);
+
     var rawP = await inventoryP;
     var custStats = await custStatsP;
     var products  = rawP.data || (Array.isArray(rawP) ? rawP : []);

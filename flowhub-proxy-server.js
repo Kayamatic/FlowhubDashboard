@@ -86,6 +86,13 @@ db.exec(`
   );
 `);
 
+// Add logo_url column if it doesn't exist yet (safe migration)
+try { db.exec("ALTER TABLE tenants ADD COLUMN logo_url TEXT"); } catch(_) {}
+
+// Ensure logos directory exists
+const LOGOS_DIR = __dirname + '/logos';
+if (!fs.existsSync(LOGOS_DIR)) fs.mkdirSync(LOGOS_DIR);
+
 // Seed the native 617THC tenant from .env (idempotent — safe to run every startup)
 db.prepare(`INSERT OR IGNORE INTO tenants (tenant_id, name, api_key, client_id, location_id)
             VALUES (?, ?, ?, ?, ?)`)
@@ -790,6 +797,13 @@ input:focus,select:focus{border-color:#c8922a}
   <div id="assignMsg" class="msg"></div>
 </div>
 
+<h2>Store Logos</h2>
+<div class="card">
+  <p style="font-size:12px;color:#666;margin-bottom:14px">Each store can display its own logo next to the Diggory brand mark in the dashboard header. Supported formats: PNG, JPG, GIF, WebP, SVG &mdash; max 3 MB. Recommended: SVG or PNG with transparent background, ~400&times;150 px.</p>
+  <div id="logoPanel"><span style="color:#555;font-size:13px">Loading&hellip;</span></div>
+  <div id="logoMsg" class="msg"></div>
+</div>
+
 <script>
 function showMsg(id, text, ok) {
   const el = document.getElementById(id);
@@ -859,7 +873,73 @@ async function assignUser() {
   else showMsg('assignMsg', d.error || 'Error', false);
 }
 
-loadUsers(); loadStores();
+// ── Logo panel ────────────────────────────────────────────────────────────────
+async function loadLogoPanel() {
+  const d = await api('GET', '/api/admin/tenants');
+  const panel = document.getElementById('logoPanel');
+  if (!d.tenants || !d.tenants.length) { panel.innerHTML = '<span style="color:#555;font-size:13px">No stores configured.</span>'; return; }
+  panel.innerHTML = d.tenants.map(t => \`
+    <div id="logoRow_\${t.tenant_id}" style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid #222;flex-wrap:wrap">
+      <div style="min-width:140px;font-size:13px;font-weight:600">\${t.name}<br><span style="font-family:monospace;font-size:10px;color:#555">\${t.tenant_id}</span></div>
+      <div style="flex:0 0 120px;height:40px;background:#111;border:1px solid #2a2a2a;border-radius:4px;display:flex;align-items:center;justify-content:center;overflow:hidden">
+        \${t.logo_url ? \`<img src="\${t.logo_url}?_=\${Date.now()}" style="max-width:116px;max-height:36px;object-fit:contain" alt="">\` : '<span style="font-size:10px;color:#444">No logo</span>'}
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <label class="btn" style="cursor:pointer;position:relative">
+          Choose File
+          <input type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml"
+            style="position:absolute;opacity:0;width:0;height:0;overflow:hidden"
+            onchange="previewLogo(this, '\${t.tenant_id}')">
+        </label>
+        <button class="btn" id="uploadBtn_\${t.tenant_id}" style="display:none" onclick="uploadLogo('\${t.tenant_id}')">Upload</button>
+        \${t.logo_url ? \`<button class="btn del" onclick="removeLogo('\${t.tenant_id}')">Remove</button>\` : ''}
+      </div>
+      <div id="logoPreview_\${t.tenant_id}" style="display:none;height:40px;background:#111;border:1px solid #2a2a2a;border-radius:4px;padding:2px;overflow:hidden">
+        <img id="logoPreviewImg_\${t.tenant_id}" src="" style="max-width:116px;max-height:36px;object-fit:contain" alt="preview">
+      </div>
+    </div>
+  \`).join('');
+}
+
+const _logoPending = {}; // tenantId → base64 data URL
+
+function previewLogo(input, tenantId) {
+  if (!input.files || !input.files[0]) return;
+  const file = input.files[0];
+  if (file.size > 3 * 1024 * 1024) { showMsg('logoMsg', 'File too large — must be under 3 MB', false); return; }
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    _logoPending[tenantId] = e.target.result;
+    const preview = document.getElementById('logoPreview_' + tenantId);
+    const img     = document.getElementById('logoPreviewImg_' + tenantId);
+    const btn     = document.getElementById('uploadBtn_' + tenantId);
+    if (preview) { preview.style.display = 'block'; }
+    if (img)     { img.src = e.target.result; }
+    if (btn)     { btn.style.display = 'inline-block'; }
+  };
+  reader.readAsDataURL(file);
+}
+
+async function uploadLogo(tenantId) {
+  const imageData = _logoPending[tenantId];
+  if (!imageData) return showMsg('logoMsg', 'No file selected', false);
+  const btn = document.getElementById('uploadBtn_' + tenantId);
+  if (btn) btn.textContent = 'Uploading…';
+  const d = await api('POST', '/api/admin/tenant/' + encodeURIComponent(tenantId) + '/logo', { imageData });
+  if (btn) btn.textContent = 'Upload';
+  if (d.ok) { delete _logoPending[tenantId]; showMsg('logoMsg', 'Logo updated for ' + tenantId, true); loadLogoPanel(); }
+  else showMsg('logoMsg', d.error || 'Upload failed', false);
+}
+
+async function removeLogo(tenantId) {
+  if (!confirm('Remove logo for ' + tenantId + '?')) return;
+  const d = await fetch('/api/admin/tenant/' + encodeURIComponent(tenantId) + '/logo', { method: 'DELETE' });
+  const j = await d.json();
+  if (j.ok) { showMsg('logoMsg', 'Logo removed', true); loadLogoPanel(); }
+  else showMsg('logoMsg', j.error || 'Error', false);
+}
+
+loadUsers(); loadStores(); loadLogoPanel();
 </script>
 </body></html>`);
   });
@@ -1068,7 +1148,8 @@ async function fetchInventory() {
   return _invCache;
 }
 app.get("/api/session-info", (q,s) => {
-  s.json({ demo: q.demoMode || false, user: q.dashUser || null, tenantId: q.tenantId || '617thc', tenants: q.userTenants || [], role: q.userRole || 'store_manager' });
+  const tenantRow = q.tenantId ? db.prepare('SELECT logo_url, name FROM tenants WHERE tenant_id = ?').get(q.tenantId) : null;
+  s.json({ demo: q.demoMode || false, user: q.dashUser || null, tenantId: q.tenantId || '617thc', tenants: q.userTenants || [], role: q.userRole || 'store_manager', logoUrl: tenantRow && tenantRow.logo_url || null, tenantName: tenantRow && tenantRow.name || null });
 });
 app.get("/api/inventory", async(q,s) => {
   try { s.setHeader('Cache-Control','private,max-age=300'); s.json(await fetchInventory()); }
@@ -1299,7 +1380,7 @@ async function fetchAllCustomersForTenant(tenantId) {
 // ── Admin endpoints — tenant management (authenticated, owner-only for now) ───
 app.get('/api/admin/tenants', requireOwner, (req, res) => {
   try {
-    const tenants = db.prepare('SELECT tenant_id, name, location_id, timezone, active, created_at FROM tenants ORDER BY created_at ASC').all();
+    const tenants = db.prepare('SELECT tenant_id, name, location_id, timezone, active, logo_url, created_at FROM tenants ORDER BY created_at ASC').all();
     const userTenantMap = {};
     db.prepare('SELECT username, tenant_id, role FROM user_tenants').all()
       .forEach(r => { if (!userTenantMap[r.tenant_id]) userTenantMap[r.tenant_id] = []; userTenantMap[r.tenant_id].push({username: r.username, role: r.role}); });
@@ -1395,6 +1476,51 @@ app.delete('/api/admin/user/:username', requireOwner, (req, res) => {
     db.prepare('DELETE FROM user_tenants WHERE username = ?').run(username);
     db.prepare('DELETE FROM sessions WHERE user = ?').run(username);
     console.log('[admin] user deleted:', username);
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Store logo upload / delete ────────────────────────────────────────────────
+app.post('/api/admin/tenant/:tenantId/logo', requireOwner, express.json({ limit: '4mb' }), (req, res) => {
+  try {
+    const { tenantId } = req.params;
+    const { imageData } = req.body || {};
+    if (!imageData) return res.status(400).json({ error: 'imageData required (base64 data URL)' });
+    if (!db.prepare('SELECT 1 FROM tenants WHERE tenant_id = ?').get(tenantId))
+      return res.status(404).json({ error: 'Tenant not found' });
+
+    // Parse data URL: data:image/png;base64,....
+    const match = imageData.match(/^data:(image\/(png|jpe?g|gif|webp|svg\+xml));base64,(.+)$/);
+    if (!match) return res.status(400).json({ error: 'Invalid image format. Use PNG, JPG, GIF, WebP, or SVG.' });
+    const ext    = match[2] === 'svg+xml' ? 'svg' : match[2].replace('jpeg', 'jpg');
+    const buffer = Buffer.from(match[3], 'base64');
+    if (buffer.length > 3 * 1024 * 1024) return res.status(400).json({ error: 'Logo must be under 3 MB' });
+
+    // Remove old logo file if it exists
+    const existing = db.prepare('SELECT logo_url FROM tenants WHERE tenant_id = ?').get(tenantId);
+    if (existing && existing.logo_url) {
+      const oldPath = __dirname + existing.logo_url;
+      if (fs.existsSync(oldPath)) try { fs.unlinkSync(oldPath); } catch(_) {}
+    }
+
+    const filename = tenantId + '.' + ext;
+    fs.writeFileSync(LOGOS_DIR + '/' + filename, buffer);
+    const logoUrl = '/logos/' + filename;
+    db.prepare('UPDATE tenants SET logo_url = ? WHERE tenant_id = ?').run(logoUrl, tenantId);
+    console.log('[logo] uploaded for', tenantId, '→', logoUrl);
+    res.json({ ok: true, logoUrl });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/admin/tenant/:tenantId/logo', requireOwner, (req, res) => {
+  try {
+    const { tenantId } = req.params;
+    const row = db.prepare('SELECT logo_url FROM tenants WHERE tenant_id = ?').get(tenantId);
+    if (row && row.logo_url) {
+      const p = __dirname + row.logo_url;
+      if (fs.existsSync(p)) try { fs.unlinkSync(p); } catch(_) {}
+      db.prepare('UPDATE tenants SET logo_url = NULL WHERE tenant_id = ?').run(tenantId);
+    }
     res.json({ ok: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
