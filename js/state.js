@@ -20,6 +20,63 @@ export var state = {
 
 var CACHE_KEY = 'flowhub_cache_v2', CACHE_TTL = 3 * 60 * 1000;
 
+// ── Module-level fetch helper (also used by backgroundRefresh) ─────────────────
+function fetchJSON(url) {
+  return fetch(url).then(function(r) {
+    if (r.status === 401) { localStorage.removeItem(CACHE_KEY); window.location.href = '/login'; throw new Error('session_expired'); }
+    return r.json();
+  });
+}
+
+// ── True background refresh — silent, no loading states, sales-stats only ─────
+var _lastFullRefresh = 0;
+var FULL_REFRESH_INTERVAL = 15 * 60 * 1000; // full init (inventory + customers) every 15 min
+
+async function backgroundRefresh() {
+  if (state._loading) return; // yield to any in-progress manual reload
+  var now = Date.now();
+  // Every 15 min fall back to full init to pick up inventory/customer changes
+  if (now - _lastFullRefresh > FULL_REFRESH_INTERVAL) {
+    state._silentMode = true;
+    reloadData();
+    return;
+  }
+  // Otherwise: fetch only sales-stats — the only thing that changes every 3 min
+  try {
+    var ss = await fetchJSON('/api/sales-stats');
+    if (!state.SD || !state.SD.salesReady) return; // not initialized yet — skip
+    Object.assign(state.SD, {
+      salesReady: true,
+      todayRev:       ss.todayRev        || 0,  todayCount:      ss.todayCount      || 0,
+      yesterdayRev:   ss.yesterdayRev    || 0,  yesterdayCount:  ss.yesterdayCount  || 0,
+      weekRev:        ss.weekRev         || 0,  weekCount:       ss.weekCount        || 0,
+      monthRev:       ss.monthRev        || 0,  monthCount:      ss.monthCount       || 0,
+      lastWeekRev:    ss.lastWeekRev     || 0,  lastWeekCount:   ss.lastWeekCount    || 0,
+      lastWeekLabel:  ss.lastWeekLabel   || '',
+      lastMonthRev:   ss.lastMonthRev    || 0,  lastMonthCount:  ss.lastMonthCount   || 0,
+      lastMonthLabel: ss.lastMonthLabel  || '',
+      hourly:         ss.hourly          || [0,0,0,0,0,0,0,0,0,0,0,0],
+      hourlyCount:    ss.hourlyCount     || [0,0,0,0,0,0,0,0,0,0,0,0],
+      topProducts:         ss.topProducts         || [],
+      topProductsToday:    ss.topProductsToday    || [],
+      topProductsWeek:     ss.topProductsWeek     || [],
+      fastestDepleting7d:  ss.fastestDepleting7d  || [],
+      fastestDepleting30d: ss.fastestDepleting30d || [],
+      newVsReturning:      ss.newVsReturning       || {},
+      blToday:      ss.blToday      || 0,  blYesterday:  ss.blYesterday  || 0,
+      blWeek:       ss.blWeek       || 0,  blMonth:      ss.blMonth      || 0,
+      blLastWeek:   ss.blLastWeek   || 0,  blLastMonth:  ss.blLastMonth  || 0
+    });
+    state.defaultSD = Object.assign({}, state.SD);
+    saveCache(state.SD);
+    document.getElementById('sync').textContent = 'synced ' + new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' EST';
+    if (state.activePreset === 'default') renderPanel();
+    prefetchRolling();
+  } catch(e) {
+    if (e.message !== 'session_expired') console.warn('[bg-refresh] silent fail:', e.message);
+  }
+}
+
 export function loadCache() {
   try {
     var raw = localStorage.getItem(CACHE_KEY); if (!raw) return null;
@@ -265,12 +322,6 @@ export async function init() {
     var weekBeforeLastStartStr = localDateStr(new Date(new Date(lastWeekStartStr + 'T12:00:00Z').getTime() - 7 * 86400000));
     var monthBeforeLastEndStr   = localDateStr(new Date(new Date(lastMonthStartStr + 'T12:00:00Z').getTime() - 86400000));
     var monthBeforeLastStartStr = monthBeforeLastEndStr.slice(0, 8) + '01';
-    function fetchJSON(url) {
-      return fetch(url).then(function(r) {
-        if (r.status === 401) { localStorage.removeItem(CACHE_KEY); window.location.href = '/login'; throw new Error('session_expired'); }
-        return r.json();
-      });
-    }
     var sessP       = fetch('/api/session-info').then(function(r) { return r.json(); }).catch(function() { return {}; });
     var salesStatsP = fetchJSON('/api/sales-stats');
     var inventoryP  = fetchJSON('/api/inventory');
@@ -407,6 +458,7 @@ export async function init() {
     });
     state.defaultSD = Object.assign({}, state.SD);
     saveCache(state.SD);
+    _lastFullRefresh = Date.now(); // mark full refresh time for backgroundRefresh()
 
     document.getElementById('sync').textContent = 'synced ' + new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' EST';
     var rb = document.getElementById('reloadBtn'); rb.style.display = 'inline'; rb.style.color = '#555'; rb.style.animation = '';
@@ -429,7 +481,7 @@ export async function init() {
     state._silentMode = false;
 
     if (!state._autoRefreshTimer) {
-      state._autoRefreshTimer = setInterval(function() { state._silentMode = true; reloadData(); }, 3 * 60 * 1000);
+      state._autoRefreshTimer = setInterval(backgroundRefresh, 3 * 60 * 1000);
     }
   } catch(e) {
     if (!cached) {

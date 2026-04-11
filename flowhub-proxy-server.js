@@ -712,6 +712,11 @@ async function fetchAllOrdersCached(start, end) {
 
 let _custCache = null, _custCacheTime = 0;
 let _custFetchInFlight = null; // prevents concurrent fetches
+
+// ── Sales-stats result cache — pre-computed so the endpoint is instant ────────
+let _salesStatsCache = null, _salesStatsCacheTime = 0;
+let _salesStatsInFlight = null; // deduplicates concurrent computes
+const STATS_RESULT_TTL = 3 * 60 * 1000; // 3 min — matches frontend refresh interval
 async function fetchAllCustomers() {
   if (isDemo()) return demoFetchCustomers();
   if (_custCache && Date.now() - _custCacheTime < CUST_TTL) return _custCache;
@@ -755,6 +760,16 @@ app.get("/api/orders", async(q,s) => {
 
 // ── Sales stats — server-computed analytics, replaces raw orders download ─────
 app.get("/api/sales-stats", async(q,s) => {
+  // Return cached result immediately if fresh (skip recompute between 3-min cycles)
+  if (!isDemo() && _salesStatsCache && Date.now() - _salesStatsCacheTime < STATS_RESULT_TTL) {
+    s.setHeader('Cache-Control','private,no-store');
+    return s.json(_salesStatsCache);
+  }
+  // Deduplicate: if another request is already computing, wait for it
+  if (!isDemo() && _salesStatsInFlight) {
+    try { return s.json(await _salesStatsInFlight); } catch(e) { /* fall through to fresh compute */ }
+  }
+  const _compute = (async () => {
   try {
     const now = new Date();
     const nowEST = now.toLocaleString('sv', {timeZone:'America/New_York'});
@@ -864,8 +879,7 @@ app.get("/api/sales-stats", async(q,s) => {
       d30:   nvr(d30O,t30bound,   newLast30)
     };
 
-    s.setHeader('Cache-Control','private,max-age=60');
-    s.json({
+    const result = {
       todayRev:      +sumRev(tO).toFixed(2),  todayCount:  tO.length,
       yesterdayRev:  +sumRev(yO).toFixed(2),  yesterdayCount: yO.length,
       weekRev:       +sumRev(wO).toFixed(2),  weekCount:   wO.length,
@@ -881,8 +895,21 @@ app.get("/api/sales-stats", async(q,s) => {
       blToday: +blToday.toFixed(2), blYesterday: +blYesterday.toFixed(2),
       blWeek:  +blWeek.toFixed(2),  blMonth:     +blMonth.toFixed(2),
       blLastWeek: +blLastWeek.toFixed(2), blLastMonth: +blLastMonth.toFixed(2)
-    });
-  } catch(e) { s.status(500).json({error: e.message}); }
+    };
+    return result;
+  } catch(e) { throw e; }
+  })();
+  if (!isDemo()) _salesStatsInFlight = _compute;
+  try {
+    const result = await _compute;
+    if (!isDemo()) { _salesStatsCache = result; _salesStatsCacheTime = Date.now(); }
+    s.setHeader('Cache-Control','private,no-store');
+    s.json(result);
+  } catch(e) {
+    s.status(500).json({error: e.message});
+  } finally {
+    if (_salesStatsInFlight === _compute) _salesStatsInFlight = null;
+  }
 });
 
 app.get("/api/customers", async(q,s) => {
@@ -896,7 +923,7 @@ app.get("/api/customers", async(q,s) => {
 app.get("/api/customer-stats", async(q,s) => {
   try {
     const now = new Date();
-    const customers = await fetchAllCustomers();
+    const customers = await fetchAllCustomersNonBlocking();
     const t7   = new Date(now.getTime() -  7 * MS_PER_DAY);
     const t30  = new Date(now.getTime() - 30 * MS_PER_DAY);
     const t60  = new Date(now.getTime() - 60 * MS_PER_DAY);
@@ -2859,4 +2886,7 @@ async function warmCaches() {
     const today = _estToday();
     fetchAllOrdersCached(today, today).catch(e => console.error('[poll] today refresh error:', e.message));
   }, TODAY_TTL);
+  // Background stats cache invalidation — bust the cache every 3 min so the next request recomputes
+  // (actual recompute happens lazily on next request, keeping the server loop non-blocking)
+  setInterval(() => { _salesStatsCache = null; }, STATS_RESULT_TTL);
 })();
