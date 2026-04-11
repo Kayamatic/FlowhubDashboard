@@ -51,6 +51,13 @@ db.exec(`
     demo       INTEGER NOT NULL DEFAULT 0,
     expires_at INTEGER NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS reset_tokens (
+    token      TEXT PRIMARY KEY,
+    username   TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    used       INTEGER DEFAULT 0,
+    created_at INTEGER DEFAULT (strftime('%s','now') * 1000)
+  );
 `);
 
 // ── Multi-tenant schema ───────────────────────────────────────────────────────
@@ -531,6 +538,10 @@ input:focus{border-color:#c8922a}
 button{width:100%;background:#c8922a;border:none;color:#000;padding:13px;border-radius:5px;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer;letter-spacing:.05em;margin-top:4px;-webkit-appearance:none}
 button:active{background:#b07d20}
 .err{background:#2a0a0a;border:1px solid #5a1a1a;color:#e06060;font-size:13px;padding:10px 12px;border-radius:5px;margin-bottom:18px}
+.ok{background:#0a2a0a;border:1px solid #1a5a1a;color:#60c060;font-size:13px;padding:10px 12px;border-radius:5px;margin-bottom:18px}
+.forgot{text-align:right;margin-top:-8px;margin-bottom:16px}
+.forgot a{font-size:12px;color:#666;text-decoration:none}
+.forgot a:hover{color:#c8922a}
 </style>
 </head><body><div class="card">
 <div class="logo">617<span>THC</span></div>
@@ -541,6 +552,7 @@ button:active{background:#b07d20}
   <input type="text" name="user" autocomplete="username" autocorrect="off" autocapitalize="none" spellcheck="false" inputmode="text">
   <label>Password</label>
   <input type="password" name="pass" autocomplete="current-password">
+  <div class="forgot"><a href="/forgot-password">Forgot password?</a></div>
   <button type="submit">Sign In</button>
 </form>
 </div></body></html>`;
@@ -550,8 +562,10 @@ if (LEGACY_PASS || fs.existsSync(USERS_FILE)) {
 
   // Login page
   app.get('/login', function(req, res) {
-    res.send(LOGIN_PAGE.replace('{{ERR}}',
-      req.query.err ? '<div class="err">Incorrect username or password.</div>' : ''));
+    const msg = req.query.reset  ? '<div class="ok">Password updated — please sign in.</div>'
+              : req.query.err    ? '<div class="err">Incorrect username or password.</div>'
+              : '';
+    res.send(LOGIN_PAGE.replace('{{ERR}}', msg));
   });
 
   // Login form submit
@@ -586,6 +600,151 @@ if (LEGACY_PASS || fs.existsSync(USERS_FILE)) {
     if (cookies.dash_sess) _sessDel.run(cookies.dash_sess);
     res.setHeader('Set-Cookie', 'dash_sess=; Path=/; HttpOnly; Max-Age=0');
     res.redirect('/login');
+  });
+
+  // ── Password reset flow ───────────────────────────────────────────────────────
+  const RESET_TTL_MS  = 60 * 60 * 1000;       // tokens expire after 1 hour
+  const RESET_RATE_MS = 10 * 60 * 1000;        // max 1 request per email per 10 min
+  const _resetInsert  = db.prepare('INSERT OR REPLACE INTO reset_tokens (token, username, expires_at) VALUES (?, ?, ?)');
+  const _resetGet     = db.prepare('SELECT * FROM reset_tokens WHERE token = ? AND used = 0 AND expires_at > ?');
+  const _resetUse     = db.prepare('UPDATE reset_tokens SET used = 1 WHERE token = ?');
+  const _resetRecent  = db.prepare('SELECT COUNT(*) FROM reset_tokens WHERE username = ? AND created_at > ? AND used = 0').pluck();
+
+  async function sendResetEmail(toEmail, resetUrl) {
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      console.log('\n[reset] ⚠️  No RESEND_API_KEY — reset link for', toEmail, ':\n', resetUrl, '\n');
+      return { ok: true, console: true };
+    }
+    const fromName  = process.env.EMAIL_FROM_NAME  || 'Diggory Analytics';
+    const fromEmail = process.env.EMAIL_FROM_ADDR  || 'noreply@askdiggory.com';
+    const r = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: fromName + ' <' + fromEmail + '>',
+        to:   [toEmail],
+        subject: 'Reset your Diggory password',
+        html: `<!DOCTYPE html><html><body style="background:#0d0d0d;font-family:Helvetica Neue,Helvetica,Arial,sans-serif;padding:40px 20px">
+          <div style="max-width:420px;margin:0 auto;background:#161616;border:1px solid #2a2a2a;border-radius:10px;padding:36px 28px">
+            <div style="font-size:24px;font-weight:900;color:#f0e8d8;margin-bottom:4px">Diggory <span style="color:#c8922a">Analytics</span></div>
+            <div style="font-size:11px;color:#555;text-transform:uppercase;letter-spacing:.15em;margin-bottom:28px">Password Reset</div>
+            <p style="color:#ccc;font-size:14px;line-height:1.6;margin-bottom:24px">We received a request to reset your password. Click the button below — this link expires in <strong style="color:#f0e8d8">1 hour</strong>.</p>
+            <a href="${resetUrl}" style="display:block;background:#c8922a;color:#000;text-align:center;padding:13px;border-radius:5px;font-size:15px;font-weight:700;text-decoration:none;letter-spacing:.05em">Reset Password</a>
+            <p style="color:#555;font-size:12px;margin-top:24px;line-height:1.5">If you didn't request this, you can safely ignore this email. Your password won't change.</p>
+          </div></body></html>`
+      })
+    });
+    if (!r.ok) { const t = await r.text(); console.error('[reset] Resend error:', t); }
+    return { ok: r.ok };
+  }
+
+  // GET /forgot-password
+  app.get('/forgot-password', function(req, res) {
+    res.send(`<!DOCTYPE html><html><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>Forgot Password · Diggory</title>
+<style>*{box-sizing:border-box;margin:0;padding:0}body{background:#0d0d0d;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:16px}.card{background:#161616;border:1px solid #2a2a2a;border-radius:10px;padding:36px 28px;width:100%;max-width:340px}.logo{font-size:28px;font-weight:900;letter-spacing:-0.5px;color:#f0e8d8;margin-bottom:3px}.logo span{color:#c8922a}.sub{font-size:11px;color:#555;text-transform:uppercase;letter-spacing:.15em;margin-bottom:30px}label{display:block;font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px}input{width:100%;background:#1e1e1e;border:1px solid #333;color:#f0e8d8;padding:12px 14px;border-radius:5px;font-size:16px;font-family:inherit;outline:none;margin-bottom:16px;-webkit-appearance:none}input:focus{border-color:#c8922a}button{width:100%;background:#c8922a;border:none;color:#000;padding:13px;border-radius:5px;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer;letter-spacing:.05em;margin-top:4px;-webkit-appearance:none}button:active{background:#b07d20}.msg{font-size:13px;padding:10px 12px;border-radius:5px;margin-bottom:18px}.ok{background:#0a2a0a;border:1px solid #1a5a1a;color:#60c060}.info{color:#888;font-size:12px;margin-top:18px;text-align:center}a{color:#c8922a;text-decoration:none}</style>
+</head><body><div class="card">
+<div class="logo">Diggory <span>Analytics</span></div>
+<div class="sub">Password Recovery</div>
+${req.query.sent ? '<div class="msg ok">If that account exists, a reset link has been sent.</div>' : ''}
+<form method="POST" action="/forgot-password">
+  <label>Your Email (Username)</label>
+  <input type="email" name="email" autocomplete="email" autocorrect="off" autocapitalize="none" placeholder="you@example.com" required>
+  <button type="submit">Send Reset Link</button>
+</form>
+<div class="info"><a href="/login">← Back to sign in</a></div>
+</div></body></html>`);
+  });
+
+  // POST /forgot-password
+  app.post('/forgot-password', async function(req, res) {
+    const email = (req.body.email || '').trim().toLowerCase();
+    // Always redirect with success — prevents username enumeration
+    const done = () => res.redirect('/forgot-password?sent=1');
+    if (!email) return done();
+    const users = loadUsers();
+    const username = Object.keys(users).find(u => u.toLowerCase() === email);
+    if (!username && (!LEGACY_USER || LEGACY_USER.toLowerCase() !== email)) return done();
+    // Rate limit: 1 request per 10 min
+    if (_resetRecent.get(username || email, Date.now() - RESET_RATE_MS) > 0) return done();
+    const token = crypto.randomBytes(32).toString('hex');
+    _resetInsert.run(token, username || email, Date.now() + RESET_TTL_MS);
+    const base = process.env.BASE_URL || ('https://' + req.get('host'));
+    await sendResetEmail(email, base + '/reset-password?token=' + token);
+    done();
+  });
+
+  // GET /reset-password
+  app.get('/reset-password', function(req, res) {
+    const token = (req.query.token || '').replace(/[^a-f0-9]/g, '');
+    const row = token ? _resetGet.get(token, Date.now()) : null;
+    if (!row) {
+      return res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>Reset Password · Diggory</title>
+<style>*{box-sizing:border-box;margin:0;padding:0}body{background:#0d0d0d;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:16px}.card{background:#161616;border:1px solid #2a2a2a;border-radius:10px;padding:36px 28px;width:100%;max-width:340px}.logo{font-size:28px;font-weight:900;letter-spacing:-0.5px;color:#f0e8d8;margin-bottom:3px}.logo span{color:#c8922a}.sub{font-size:11px;color:#555;text-transform:uppercase;letter-spacing:.15em;margin-bottom:30px}.err{background:#2a0a0a;border:1px solid #5a1a1a;color:#e06060;font-size:13px;padding:10px 12px;border-radius:5px;margin-bottom:18px}.info{color:#888;font-size:12px;margin-top:18px;text-align:center}a{color:#c8922a;text-decoration:none}</style>
+</head><body><div class="card"><div class="logo">Diggory <span>Analytics</span></div><div class="sub">Password Reset</div>
+<div class="err">This reset link is invalid or has expired. Links are valid for 1 hour and can only be used once.</div>
+<div class="info"><a href="/forgot-password">Request a new link</a></div>
+</div></body></html>`);
+    }
+    res.send(`<!DOCTYPE html><html><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>Reset Password · Diggory</title>
+<style>*{box-sizing:border-box;margin:0;padding:0}body{background:#0d0d0d;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:16px}.card{background:#161616;border:1px solid #2a2a2a;border-radius:10px;padding:36px 28px;width:100%;max-width:340px}.logo{font-size:28px;font-weight:900;letter-spacing:-0.5px;color:#f0e8d8;margin-bottom:3px}.logo span{color:#c8922a}.sub{font-size:11px;color:#555;text-transform:uppercase;letter-spacing:.15em;margin-bottom:30px}label{display:block;font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px}input{width:100%;background:#1e1e1e;border:1px solid #333;color:#f0e8d8;padding:12px 14px;border-radius:5px;font-size:16px;font-family:inherit;outline:none;margin-bottom:16px;-webkit-appearance:none}input:focus{border-color:#c8922a}button{width:100%;background:#c8922a;border:none;color:#000;padding:13px;border-radius:5px;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer;letter-spacing:.05em;margin-top:4px;-webkit-appearance:none}button:active{background:#b07d20}.err{background:#2a0a0a;border:1px solid #5a1a1a;color:#e06060;font-size:13px;padding:10px 12px;border-radius:5px;margin-bottom:18px}.hint{font-size:11px;color:#555;margin-top:-10px;margin-bottom:14px}</style>
+</head><body><div class="card">
+<div class="logo">Diggory <span>Analytics</span></div>
+<div class="sub">Set New Password</div>
+${req.query.err === 'match' ? '<div class="err">Passwords do not match.</div>' : ''}
+${req.query.err === 'short' ? '<div class="err">Password must be at least 8 characters.</div>' : ''}
+<form method="POST" action="/reset-password">
+  <input type="hidden" name="token" value="${token}">
+  <label>New Password</label>
+  <input type="password" name="pass" autocomplete="new-password" minlength="8" required>
+  <label>Confirm Password</label>
+  <input type="password" name="pass2" autocomplete="new-password" minlength="8" required>
+  <button type="submit">Set Password</button>
+</form>
+</div></body></html>`);
+  });
+
+  // POST /reset-password
+  app.post('/reset-password', async function(req, res) {
+    const token = (req.body.token || '').replace(/[^a-f0-9]/g, '');
+    const pass  = req.body.pass  || '';
+    const pass2 = req.body.pass2 || '';
+    const row = token ? _resetGet.get(token, Date.now()) : null;
+    if (!row) return res.redirect('/forgot-password?sent=1'); // expired — send them back
+    if (pass.length < 8)    return res.redirect('/reset-password?token=' + token + '&err=short');
+    if (pass !== pass2)     return res.redirect('/reset-password?token=' + token + '&err=match');
+    const hash = await bcrypt.hash(pass, 12);
+    const users = loadUsers();
+    users[row.username] = hash;
+    fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
+    _resetUse.run(token);
+    // Invalidate all existing sessions for this user (force re-login with new password)
+    db.prepare('DELETE FROM sessions WHERE user = ?').run(row.username);
+    console.log('[reset] Password updated for:', row.username);
+    res.redirect('/login?reset=1');
+  });
+
+  // ── Change password (while logged in) ─────────────────────────────────────────
+  app.post('/auth/change-password', async function(req, res) {
+    const cookies = parseCookies(req);
+    const sess = cookies.dash_sess ? _sessGet.get(cookies.dash_sess, Date.now()) : null;
+    if (!sess) return res.status(401).json({ error: 'Not logged in' });
+    const { current, pass, pass2 } = req.body || {};
+    if (!current || !pass) return res.status(400).json({ error: 'Current password and new password required' });
+    if (pass.length < 8)   return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    if (pass !== pass2)    return res.status(400).json({ error: 'Passwords do not match' });
+    const users = loadUsers();
+    const hash = users[sess.user];
+    if (!hash) return res.status(400).json({ error: 'Account not found in users.json' });
+    const ok = await bcrypt.compare(current, hash);
+    if (!ok) return res.status(403).json({ error: 'Current password is incorrect' });
+    users[sess.user] = await bcrypt.hash(pass, 12);
+    fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
+    res.json({ ok: true });
   });
 
   // Auth guard — runs before static files
