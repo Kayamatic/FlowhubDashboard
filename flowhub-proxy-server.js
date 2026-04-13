@@ -1729,7 +1729,8 @@ app.get("/api/sales-stats", async(q,s) => {
 
     // Date range helpers
     const dow = now.getDay();
-    const weekStartStr = new Date(now.getTime() - dow*MS_PER_DAY).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
+    const mondayOffset = dow === 0 ? 6 : dow - 1; // Mon=0 offset, Sun=6 offset — week starts Monday
+    const weekStartStr = new Date(now.getTime() - mondayOffset*MS_PER_DAY).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
     const monthStartStr = todayStr.slice(0,8)+'01';
     const lastWeekEndStr = new Date(new Date(weekStartStr+'T12:00:00Z').getTime()-MS_PER_DAY).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
     const lastWeekStartStr = new Date(new Date(weekStartStr+'T12:00:00Z').getTime()-7*MS_PER_DAY).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
