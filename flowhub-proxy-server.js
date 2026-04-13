@@ -3730,22 +3730,40 @@ app.post("/api/chat", express.json(), async(req, res) => {
       ? lastUserMsg.content
       : (Array.isArray(lastUserMsg?.content) ? (lastUserMsg.content.find(c => c.type === 'text') || {}).text : '') || '';
 
+    // Model fallback chain — if primary is overloaded, step down automatically
+    const MODEL_CHAIN = [
+      'claude-sonnet-4-20250514',    // Primary: latest, best quality
+      'claude-3-5-sonnet-20241022',  // Fallback 1: proven stable, tons of capacity
+      'claude-3-5-haiku-20241022'    // Fallback 2: almost never overloaded
+    ];
+
     for (let i = 0; i < 8; i++) {
       let d;
-      for (let attempt = 0; attempt < 5; attempt++) {
-        const r = await fetch("https://api.anthropic.com/v1/messages", {
-          method: "POST",
-          headers: {"Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01"},
-          body: JSON.stringify({model: "claude-sonnet-4-20250514", max_tokens: 1500, system: sys, tools: TOOLS, messages: msgs})
-        });
-        d = await r.json();
-        if (d.error && d.error.type === 'overloaded_error' && attempt < 4) {
-          const wait = Math.min(1000 * Math.pow(2, attempt), 16000); // 1s, 2s, 4s, 8s, 16s
-          console.log(`[ai-chat] overloaded — retrying in ${wait/1000}s (attempt ${attempt+1}/5)`);
-          await new Promise(res => setTimeout(res, wait));
-          continue;
+      let resolved = false;
+      for (let mi = 0; mi < MODEL_CHAIN.length && !resolved; mi++) {
+        const model = MODEL_CHAIN[mi];
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const r = await fetch("https://api.anthropic.com/v1/messages", {
+            method: "POST",
+            headers: {"Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01"},
+            body: JSON.stringify({model, max_tokens: 1500, system: sys, tools: TOOLS, messages: msgs})
+          });
+          d = await r.json();
+          if (d.error && d.error.type === 'overloaded_error') {
+            if (attempt < 2) {
+              const wait = 2000 * (attempt + 1); // 2s, 4s
+              console.log(`[ai-chat] ${model} overloaded — retrying in ${wait/1000}s (attempt ${attempt+1}/3)`);
+              await new Promise(res => setTimeout(res, wait));
+              continue;
+            }
+            // All retries on this model exhausted — try next model
+            console.log(`[ai-chat] ${model} still overloaded after 3 attempts — falling back`);
+            break;
+          }
+          if (mi > 0) console.log(`[ai-chat] Serving on fallback model: ${model}`);
+          resolved = true;
+          break;
         }
-        break;
       }
       if (d.error) return send({error: 'api_error', message: (d.error && d.error.message) || JSON.stringify(d.error)});
 
