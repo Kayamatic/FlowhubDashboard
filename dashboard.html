@@ -213,7 +213,6 @@ body{background:#0a0a0a;color:#f0e8d8;font-family:'Courier New',monospace;height
   </div>
   <div class="hdr-right">
     <span class="badge" style="border-color:#e06060;color:#e06060;background:#2a0f0f;display:none;cursor:pointer" id="lowbadge" onclick="openLowStockModal()"></span>
-    <button class="btn" id="keyBtn" onclick="toggleKey()">SET AI KEY</button>
     <a href="/admin" id="adminBtn" title="Admin settings" style="display:none;text-decoration:none;background:none;border:1px solid #333;color:#666;border-radius:4px;padding:4px 8px;margin-left:6px;font-size:15px;line-height:1;cursor:pointer" aria-label="Admin">⚙</a>
     <a href="/logout" class="btn" style="text-decoration:none;font-size:10px;padding:4px 10px;border-color:#555;color:#777;margin-left:6px" title="Sign out">LOGOUT</a>
   </div>
@@ -230,10 +229,6 @@ body{background:#0a0a0a;color:#f0e8d8;font-family:'Courier New',monospace;height
 <div class="mobile-nav" id="mobileNav">
   <button class="mnav-btn on" id="mnav-data" onclick="setMobileView('data')">Dashboard</button>
   <button class="mnav-btn" id="mnav-chat" onclick="setMobileView('chat')">AI Chat</button>
-</div>
-<div class="key-bar" id="keyBar" style="display:none">
-  <input type="password" id="keyInput" placeholder="Anthropic API key  sk-ant-...">
-  <button onclick="saveKey()">SAVE</button>
 </div>
 <div class="body">
   <div class="left">

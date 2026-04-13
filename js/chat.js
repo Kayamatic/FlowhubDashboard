@@ -72,7 +72,6 @@ export async function sendChat(text) {
     var msgs = state.chatHistory.slice(0, -2).filter(function(m) { return m.text; }).map(function(m) { return { role: m.role === 'user' ? 'user' : 'assistant', content: m.text }; });
     msgs.push({ role: 'user', content: t });
     var headers = { 'Content-Type': 'application/json' };
-    if (state.aiKey) headers['x-api-key'] = state.aiKey;
     var SD = state.SD;
     var ctx = SD ? { todayRev: SD.todayRev, todayCount: SD.todayCount, weekRev: SD.weekRev, weekCount: SD.weekCount, monthRev: SD.monthRev, monthCount: SD.monthCount, totalCustomers: SD.totalCustomers, newCustomersToday: SD.newCustomersToday, newCustomersWeek: SD.newCustomersWeek, newCustomers: SD.newCustomers, loyalCustomers: SD.loyalCustomers, churnRisk: SD.churnRisk, lowStockCount: SD.lowStock ? SD.lowStock.length : 0, totalSkus: SD.totalSkus } : {};
     var res = await fetch('/api/chat', { method: 'POST', headers: headers, body: JSON.stringify({ messages: msgs, context: ctx }) });
@@ -99,7 +98,7 @@ export async function sendChat(text) {
         try { j = JSON.parse(ln.slice(6)); } catch(_) { continue; }
         if (j.error) {
           var errMsg = j.error === 'session_expired' ? 'Session expired \u2014 please refresh the page to log in again.'
-            : j.error === 'no_key' ? 'Please set your Anthropic API key using the SET AI KEY button in the top right.'
+            : j.error === 'no_key' ? 'Anthropic API key not configured. Please ask your administrator to set it in the Admin panel.'
             : 'Error: ' + (j.message || j.error);
           updateMsg(loadId, errMsg); state.chatHistory[state.chatHistory.length - 1].text = errMsg; return;
         }
@@ -135,8 +134,6 @@ export async function sendChat(text) {
 
 export function handleKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } }
 
-export function toggleKey() { var b = document.getElementById('keyBar'); b.style.display = b.style.display === 'none' ? 'flex' : 'none'; }
-export function saveKey() { state.aiKey = document.getElementById('keyInput').value.trim(); localStorage.setItem('flowhub_ai_key', state.aiKey); document.getElementById('keyBtn').textContent = state.aiKey ? 'AI KEY SET' : 'SET AI KEY'; document.getElementById('keyBar').style.display = 'none'; }
 
 export function initQuickBar() {
   var qb = document.getElementById('quickBar');
@@ -149,5 +146,3 @@ function isMobile() { return window.innerWidth <= 767; }
 window.sendChat = sendChat;
 window.handleKey = handleKey;
 window.copyChat = copyChat;
-window.toggleKey = toggleKey;
-window.saveKey = saveKey;

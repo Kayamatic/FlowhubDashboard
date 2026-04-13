@@ -11,12 +11,6 @@ import './inventory.js';
 import './customers.js';
 import './chat.js';
 
-// ── Restore saved AI key ──
-(function() {
-  var saved = localStorage.getItem('flowhub_ai_key');
-  if (saved) { state.aiKey = saved; document.getElementById('keyBtn').textContent = 'AI KEY SET'; document.getElementById('keyInput').value = saved; }
-})();
-
 // ── Quick bar ──
 initQuickBar();
 

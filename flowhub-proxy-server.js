@@ -58,7 +58,17 @@ db.exec(`
     used       INTEGER DEFAULT 0,
     created_at INTEGER DEFAULT (strftime('%s','now') * 1000)
   );
+  CREATE TABLE IF NOT EXISTS app_config (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+  );
 `);
+
+// ── Server-side Anthropic key (set via /admin, falls back to .env) ───────────
+function getAnthropicKey() {
+  const row = db.prepare("SELECT value FROM app_config WHERE key = 'anthropic_api_key'").get();
+  return (row && row.value) || process.env.ANTHROPIC_API_KEY || null;
+}
 
 // ── Multi-tenant schema ───────────────────────────────────────────────────────
 db.exec(`
@@ -797,6 +807,18 @@ input:focus,select:focus{border-color:#c8922a}
   <div id="assignMsg" class="msg"></div>
 </div>
 
+<h2>AI Configuration</h2>
+<div class="card">
+  <p style="font-size:12px;color:#666;margin-bottom:14px">Anthropic API key used by Diggory AI chat. Get yours at <a href="https://console.anthropic.com" target="_blank" style="color:#c8922a">console.anthropic.com</a>. The key is stored securely on the server and never exposed to users.</p>
+  <div id="aiKeyStatus" style="font-size:13px;color:#666;margin-bottom:12px">Checking…</div>
+  <div class="row">
+    <div class="field"><label>Anthropic API Key</label><input id="aiKeyInput" type="password" placeholder="sk-ant-api03-..."></div>
+    <button class="btn" onclick="saveAiKey()">Save Key</button>
+    <button class="btn del" id="aiKeyDelBtn" style="display:none" onclick="deleteAiKey()">Remove</button>
+  </div>
+  <div id="aiKeyMsg" class="msg"></div>
+</div>
+
 <h2>Store Logos</h2>
 <div class="card">
   <p style="font-size:12px;color:#666;margin-bottom:14px">Each store can display its own logo next to the Diggory brand mark in the dashboard header. Supported formats: PNG, JPG, GIF, WebP, SVG &mdash; max 3 MB. Recommended: SVG or PNG with transparent background, ~400&times;150 px.</p>
@@ -939,7 +961,36 @@ async function removeLogo(tenantId) {
   else showMsg('logoMsg', j.error || 'Error', false);
 }
 
-loadUsers(); loadStores(); loadLogoPanel();
+// ── AI Key ────────────────────────────────────────────────────────────────────
+async function loadAiKeyStatus() {
+  const d = await api('GET', '/api/admin/ai-key');
+  const status = document.getElementById('aiKeyStatus');
+  const delBtn = document.getElementById('aiKeyDelBtn');
+  if (d.configured) {
+    status.innerHTML = \`<span style="color:#60c060">&#10003; Key configured</span> <span style="color:#555;font-family:monospace">\${d.masked}</span>\`;
+    if (delBtn) delBtn.style.display = 'inline-block';
+  } else {
+    status.innerHTML = '<span style="color:#e06060">&#10007; No key set — AI chat will not work until a key is saved</span>';
+    if (delBtn) delBtn.style.display = 'none';
+  }
+}
+
+async function saveAiKey() {
+  const key = document.getElementById('aiKeyInput').value.trim();
+  if (!key) return showMsg('aiKeyMsg', 'Paste your Anthropic API key first', false);
+  const d = await api('POST', '/api/admin/ai-key', { key });
+  if (d.ok) { showMsg('aiKeyMsg', 'Key saved', true); document.getElementById('aiKeyInput').value = ''; loadAiKeyStatus(); }
+  else showMsg('aiKeyMsg', d.error || 'Error', false);
+}
+
+async function deleteAiKey() {
+  if (!confirm('Remove the Anthropic API key? AI chat will stop working until a new key is added.')) return;
+  const d = await api('DELETE', '/api/admin/ai-key');
+  if (d.ok) { showMsg('aiKeyMsg', 'Key removed', true); loadAiKeyStatus(); }
+  else showMsg('aiKeyMsg', d.error || 'Error', false);
+}
+
+loadUsers(); loadStores(); loadLogoPanel(); loadAiKeyStatus();
 </script>
 </body></html>`);
   });
@@ -1478,6 +1529,25 @@ app.delete('/api/admin/user/:username', requireOwner, (req, res) => {
     console.log('[admin] user deleted:', username);
     res.json({ ok: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Admin: Anthropic API key ──────────────────────────────────────────────────
+app.get('/api/admin/ai-key', requireOwner, (req, res) => {
+  const key = getAnthropicKey();
+  res.json({ configured: !!key, masked: key ? 'sk-ant-...' + key.slice(-4) : null });
+});
+app.post('/api/admin/ai-key', requireOwner, express.json(), (req, res) => {
+  try {
+    const { key } = req.body || {};
+    if (!key || !key.startsWith('sk-ant-')) return res.status(400).json({ error: 'Invalid key — must start with sk-ant-' });
+    db.prepare("INSERT OR REPLACE INTO app_config (key, value) VALUES ('anthropic_api_key', ?)").run(key);
+    console.log('[admin] Anthropic API key updated');
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+app.delete('/api/admin/ai-key', requireOwner, (req, res) => {
+  db.prepare("DELETE FROM app_config WHERE key = 'anthropic_api_key'").run();
+  res.json({ ok: true });
 });
 
 // ── Store logo upload / delete ────────────────────────────────────────────────
@@ -3533,8 +3603,8 @@ app.post("/api/chat", express.json(), async(req, res) => {
   }
 
   try {
-    const apiKey = req.headers['x-api-key'] || process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) return send({error: 'no_key', message: 'No Anthropic API key configured. Use the SET AI KEY button.'});
+    const apiKey = getAnthropicKey();
+    if (!apiKey) return send({error: 'no_key', message: 'No Anthropic API key configured. Set it in the Admin panel.'});
 
     const userId = req.dashUser || 'default';
     const {messages, context} = req.body;
