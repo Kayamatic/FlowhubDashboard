@@ -2120,6 +2120,20 @@ function weekOf(dateStr) {
 
 // ── Analytics compute functions ───────────────────────────────────────────────
 
+// Flowhub uses different category names in orders vs inventory:
+//   Orders: PreRoll, Infused Flower, ...    Inventory: Joint, ...
+// Normalize so keyword search matches regardless of source naming
+function normCategory(cat) {
+  const ALIASES = {
+    'preroll':  'preroll joint pre-roll pre roll prj',
+    'joint':    'preroll joint pre-roll pre roll prj',
+    'pre-roll': 'preroll joint pre-roll pre roll prj',
+    'pre roll': 'preroll joint pre-roll pre roll prj',
+    'prj':      'preroll joint pre-roll pre roll prj'
+  };
+  return ALIASES[cat] || cat;
+}
+
 async function computeHeatmap(days) {
   const end   = new Date().toISOString().slice(0, 10);
   const start = new Date(Date.now() - (days || 90) * MS_PER_DAY).toISOString().slice(0, 10);
@@ -2334,7 +2348,7 @@ async function computeWeeklySkuSales(keyword, startDate, endDate) {
     (o.itemsInCart || []).forEach(i => {
       const pn = (i.productName || '').toLowerCase();
       const br = (i.brand || '').toLowerCase();
-      const ct = (i.category || '').toLowerCase();
+      const ct = normCategory((i.category || '').toLowerCase());
       const searchable = pn + ' ' + br + ' ' + ct;
       if (terms.every(t => searchable.includes(t))) {
         matchedSkus.add(i.productName || 'Unknown');
@@ -2370,7 +2384,7 @@ async function computeDailySkuSales(keyword, days, startDate, endDate) {
     (o.itemsInCart || []).forEach(i => {
       const pn = (i.productName || '').toLowerCase();
       const br = (i.brand || '').toLowerCase();
-      const ct = (i.category || '').toLowerCase();
+      const ct = normCategory((i.category || '').toLowerCase());
       const searchable = pn + ' ' + br + ' ' + ct;
       if (terms.every(t => searchable.includes(t))) {
         matchedSkus.add(i.productName || 'Unknown');
@@ -2763,7 +2777,7 @@ async function computeDailySkuMargin(keyword, days, startDate, endDate) {
     (o.itemsInCart || []).forEach(i => {
       const pn = (i.productName || '').toLowerCase();
       const br = (i.brand || '').toLowerCase();
-      const ct = (i.category || '').toLowerCase();
+      const ct = normCategory((i.category || '').toLowerCase());
       const searchable = pn + ' ' + br + ' ' + ct;
       if (terms.every(t => searchable.includes(t))) {
         matchedSkus.add(i.productName || 'Unknown');
@@ -3684,7 +3698,7 @@ LOYALTY DATA (Alpine IQ Integration):
 - Points are earned through purchases and can be redeemed for discounts.
 
 CATEGORY TERMINOLOGY:
-- "Joint" is the Flowhub category name. When a user says "preroll", "pre-roll", "pre roll", "PRJ", or "prerolls", they mean the "Joint" category. Always search/filter using category "Joint".
+- Prerolls may appear as category "PreRoll", "Joint", or "pre-roll" depending on the data source. When a user says "preroll", "pre-roll", "pre roll", "PRJ", "prerolls", or "joints", search using any of these terms — the system normalizes them automatically.
 - "Edible" includes gummies, chocolates, lozenges, mints, etc.
 - "Accessories" includes lighters, rolling papers, batteries, and tinctures (tinctures are classified as accessories in Flowhub because they contain no THC and are exempt from cannabis excise tax).
 
