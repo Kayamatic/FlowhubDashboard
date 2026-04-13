@@ -2164,13 +2164,13 @@ async function computeTopProducts(start, end, limit) {
   const pm = {};
   orders.forEach(o => (o.itemsInCart || []).forEach(i => {
     const n = i.productName || 'Unknown';
-    if (!pm[n]) pm[n] = {revenue: 0, units: 0, transactions: 0};
+    if (!pm[n]) pm[n] = {revenue: 0, units: 0, transactions: 0, brand: i.brand || null, category: i.category || null};
     pm[n].revenue += (i.totalPrice || 0);
     pm[n].units   += (i.quantity || 1);
     pm[n].transactions++;
   }));
   const products = Object.entries(pm)
-    .map(([name, v]) => ({name, revenue: Math.round(v.revenue), units: v.units, avgPrice: v.units ? +(v.revenue / v.units).toFixed(2) : 0, transactions: v.transactions}))
+    .map(([name, v]) => ({name, brand: v.brand, category: v.category, revenue: Math.round(v.revenue), units: v.units, avgPrice: v.units ? +(v.revenue / v.units).toFixed(2) : 0, transactions: v.transactions}))
     .sort((a, b) => b.revenue - a.revenue).slice(0, limit || 10);
   return {startDate: start, endDate: end, products};
 }
@@ -2325,7 +2325,7 @@ async function computeWeeklySkuSales(keyword, startDate, endDate) {
   const end = endDate || now.toISOString().slice(0, 10);
   const start = startDate || new Date(now.getTime() - 90 * MS_PER_DAY).toISOString().slice(0, 10);
   const orders = (await fetchAllOrdersCached(start, end)).filter(o => o.orderStatus === 'sold' && o.completedOn);
-  // Split keyword into terms — all must match product name
+  // Split keyword into terms — all must match product name, brand, OR category
   const terms = keyword.toLowerCase().trim().split(/\s+/);
   const byWeek = {}, matchedSkus = new Set();
   orders.forEach(o => {
@@ -2333,7 +2333,10 @@ async function computeWeeklySkuSales(keyword, startDate, endDate) {
     const wk = weekOf(date);
     (o.itemsInCart || []).forEach(i => {
       const pn = (i.productName || '').toLowerCase();
-      if (terms.every(t => pn.includes(t))) {
+      const br = (i.brand || '').toLowerCase();
+      const ct = (i.category || '').toLowerCase();
+      const searchable = pn + ' ' + br + ' ' + ct;
+      if (terms.every(t => searchable.includes(t))) {
         matchedSkus.add(i.productName || 'Unknown');
         if (!byWeek[wk]) byWeek[wk] = {weekOf: wk, units: 0, revenue: 0, skus: {}};
         const qty = i.quantity || 1;
@@ -2366,7 +2369,10 @@ async function computeDailySkuSales(keyword, days, startDate, endDate) {
     const {date} = estInfo(o.completedOn);
     (o.itemsInCart || []).forEach(i => {
       const pn = (i.productName || '').toLowerCase();
-      if (terms.every(t => pn.includes(t))) {
+      const br = (i.brand || '').toLowerCase();
+      const ct = (i.category || '').toLowerCase();
+      const searchable = pn + ' ' + br + ' ' + ct;
+      if (terms.every(t => searchable.includes(t))) {
         matchedSkus.add(i.productName || 'Unknown');
         if (!byDay[date]) byDay[date] = {date, units: 0, revenue: 0, skus: {}};
         const qty = i.quantity || 1;
@@ -2756,7 +2762,10 @@ async function computeDailySkuMargin(keyword, days, startDate, endDate) {
     const {date} = estInfo(o.completedOn);
     (o.itemsInCart || []).forEach(i => {
       const pn = (i.productName || '').toLowerCase();
-      if (terms.every(t => pn.includes(t))) {
+      const br = (i.brand || '').toLowerCase();
+      const ct = (i.category || '').toLowerCase();
+      const searchable = pn + ' ' + br + ' ' + ct;
+      if (terms.every(t => searchable.includes(t))) {
         matchedSkus.add(i.productName || 'Unknown');
         if (!byDay[date]) byDay[date] = {date, units: 0, revenue: 0, cost: 0};
         const qty = i.quantity || 1;
@@ -3663,6 +3672,7 @@ TOOL SELECTION RULES:
 - For "since inception" or all-time queries, omit start_date/end_date and let the tool use its default.
 - When a user asks how many of a product type were sold "each day", "per day", "daily", "past N days", or "last N days", ALWAYS use get_daily_sku_sales — NOT get_weekly_sku_sales. get_weekly_sku_sales groups by week and will NOT answer per-day questions correctly.
 - When a user asks about margin, profit, gross profit, or COGS for a product type broken down by day, ALWAYS use get_daily_sku_margin. Never use get_margin_analysis for per-day breakdowns — it only returns aggregate totals.
+- The keyword parameter in get_weekly_sku_sales, get_daily_sku_sales, and get_daily_sku_margin searches across product name, brand, AND category. So keyword "Joint" matches all products in the Joint category, and keyword "Stiiizy" matches all Stiiizy brand products. These tools are the best choice for category or brand breakdowns over time.
 - When the user asks for a table, spreadsheet, CSV, export, or download of data (e.g. "give me hourly transactions", "export daily revenue", "download a breakdown"), ALWAYS use generate_csv. Choose the most appropriate report_type: hourly_by_day for hour-by-day grids, hourly_by_weekday for weekday patterns, daily_summary for per-day totals, weekly_summary for per-week totals, top_products for product rankings, hourly_heatmap for aggregate hour-of-day averages. After calling generate_csv, confirm what was generated and tell the user the download button will appear below.
 
 LOYALTY DATA (Alpine IQ Integration):
