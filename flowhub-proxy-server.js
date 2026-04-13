@@ -3622,16 +3622,16 @@ app.post("/api/chat", express.json(), async(req, res) => {
 
     for (let i = 0; i < 8; i++) {
       let d;
-      for (let attempt = 0; attempt < 3; attempt++) {
+      for (let attempt = 0; attempt < 5; attempt++) {
         const r = await fetch("https://api.anthropic.com/v1/messages", {
           method: "POST",
           headers: {"Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01"},
           body: JSON.stringify({model: "claude-sonnet-4-20250514", max_tokens: 1500, system: sys, tools: TOOLS, messages: msgs})
         });
         d = await r.json();
-        if (d.error && d.error.type === 'overloaded_error' && attempt < 2) {
-          const wait = 1000 * (attempt + 1);
-          console.log(`[ai-chat] overloaded — retrying in ${wait/1000}s (attempt ${attempt+1}/3)`);
+        if (d.error && d.error.type === 'overloaded_error' && attempt < 4) {
+          const wait = Math.min(1000 * Math.pow(2, attempt), 16000); // 1s, 2s, 4s, 8s, 16s
+          console.log(`[ai-chat] overloaded — retrying in ${wait/1000}s (attempt ${attempt+1}/5)`);
           await new Promise(res => setTimeout(res, wait));
           continue;
         }
