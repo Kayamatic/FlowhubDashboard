@@ -331,7 +331,7 @@ export async function init() {
     state.isDemo  = sessInfo.demo || false;
     state.userRole = sessInfo.role || 'store_manager';
     var adminBtn = document.getElementById('adminBtn');
-    if (adminBtn) adminBtn.style.display = state.userRole === 'owner' ? 'inline-block' : 'none';
+    if (adminBtn) adminBtn.style.display = (state.userRole === 'owner' && !state.isDemo) ? 'inline-block' : 'none';
 
     // ── Per-tenant store logo ─────────────────────────────────────────────────
     // When a tenant has uploaded a custom logo, swap out the default SVG for it
