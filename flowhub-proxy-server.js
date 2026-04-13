@@ -3733,8 +3733,7 @@ app.post("/api/chat", express.json(), async(req, res) => {
     // Model fallback chain — if primary is overloaded, step down automatically
     const MODEL_CHAIN = [
       'claude-sonnet-4-20250514',    // Primary: latest, best quality
-      'claude-3-5-sonnet-20241022',  // Fallback 1: proven stable, tons of capacity
-      'claude-3-5-haiku-20241022'    // Fallback 2: almost never overloaded
+      'claude-haiku-4-5-20251001'    // Fallback: fast, cheap, almost never overloaded
     ];
 
     for (let i = 0; i < 8; i++) {
