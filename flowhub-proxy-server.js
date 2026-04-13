@@ -3205,6 +3205,83 @@ async function generateCsvReport(reportType, startDate, endDate) {
   };
 }
 
+// ── Top Customer Category Mix ─────────────────────────────────────────────────
+async function computeTopCustomerCategories(days, limit, startDate, endDate) {
+  const now = new Date();
+  const end = endDate || now.toISOString().slice(0, 10);
+  const start = startDate || new Date(now.getTime() - (days || 90) * MS_PER_DAY).toISOString().slice(0, 10);
+  const orders = (await fetchAllOrdersCached(start, end)).filter(o => o.orderStatus === 'sold' && o.completedOn);
+
+  // Build per-customer spend + category breakdown in one pass
+  const custMap = {}; // customerId → { name, totalRev, totalUnits, cats: { cat → { units, rev } } }
+  orders.forEach(o => {
+    const cid = o.customerId || o.customerName || 'walk-in';
+    const cname = o.customerName || 'Walk-in';
+    if (!custMap[cid]) custMap[cid] = { name: cname, totalRev: 0, totalUnits: 0, cats: {} };
+    const c = custMap[cid];
+    (o.itemsInCart || []).forEach(i => {
+      const cat = i.category || 'Other';
+      const qty = i.quantity || 1;
+      const rev = i.totalPrice || 0;
+      c.totalRev += rev;
+      c.totalUnits += qty;
+      if (!c.cats[cat]) c.cats[cat] = { units: 0, revenue: 0 };
+      c.cats[cat].units += qty;
+      c.cats[cat].revenue += rev;
+    });
+  });
+
+  // Rank by revenue, take top N
+  const topN = Object.entries(custMap)
+    .filter(([id]) => id !== 'walk-in')
+    .map(([id, v]) => ({ customerId: id, ...v }))
+    .sort((a, b) => b.totalRev - a.totalRev)
+    .slice(0, limit || 50);
+
+  // Aggregate category breakdown across all top N
+  const aggCats = {};
+  let aggUnits = 0, aggRev = 0;
+  topN.forEach(c => {
+    aggUnits += c.totalUnits;
+    aggRev += c.totalRev;
+    Object.entries(c.cats).forEach(([cat, v]) => {
+      if (!aggCats[cat]) aggCats[cat] = { units: 0, revenue: 0 };
+      aggCats[cat].units += v.units;
+      aggCats[cat].revenue += v.revenue;
+    });
+  });
+
+  const categoryBreakdown = Object.entries(aggCats)
+    .map(([category, v]) => ({
+      category,
+      units: v.units,
+      unitsPct: aggUnits ? +(v.units / aggUnits * 100).toFixed(1) : 0,
+      revenue: Math.round(v.revenue),
+      revenuePct: aggRev ? +(v.revenue / aggRev * 100).toFixed(1) : 0
+    }))
+    .sort((a, b) => b.revenue - a.revenue);
+
+  // Per-customer summary (top category, spend)
+  const customers = topN.map(c => {
+    const topCat = Object.entries(c.cats).sort((a, b) => b[1].units - a[1].units)[0];
+    return {
+      name: c.name,
+      totalSpend: Math.round(c.totalRev),
+      totalUnits: c.totalUnits,
+      topCategory: topCat ? topCat[0] : 'N/A',
+      topCategoryPct: topCat && c.totalUnits ? +(topCat[1].units / c.totalUnits * 100).toFixed(0) : 0
+    };
+  });
+
+  return {
+    startDate: start, endDate: end,
+    customerCount: topN.length,
+    totalUnits: aggUnits, totalRevenue: Math.round(aggRev),
+    categoryBreakdown,
+    customers
+  };
+}
+
 // ── Customer Segment Builder (AIQ export) ────────────────────────────────────
 async function buildCustomerSegment(input) {
   const all = await fetchAllCustomers();
@@ -3592,6 +3669,20 @@ const TOOLS = [
     }
   },
   {
+    name: 'get_top_customer_categories',
+    description: 'Analyzes what product categories the top N customers are buying. Returns aggregate category breakdown (units, revenue, percentages) across top customers plus per-customer summary. Use for questions like "what % of top customer purchases are edibles", "what do our best customers buy", "category mix of top 50 spenders".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        days:       {type: 'number', description: 'Lookback window in days (default 90)'},
+        limit:      {type: 'number', description: 'Number of top customers to analyze (default 50)'},
+        start_date: {type: 'string', description: 'Start date YYYY-MM-DD (overrides days)'},
+        end_date:   {type: 'string', description: 'End date YYYY-MM-DD'}
+      },
+      required: []
+    }
+  },
+  {
     name: 'build_customer_segment',
     description: 'Builds a custom customer segment and generates an Alpine IQ–ready CSV with email, phone, firstName, lastName, loyaltyPoints, consent flags, and customerType. Use when someone asks to create a segment, build a list, export customers for a campaign, identify a customer group for messaging, or anything involving targeting customers based on behavior, loyalty, spend, visit frequency, product purchase history, or activity recency. The CSV is formatted for direct upload to Alpine IQ. Example prompts: "build a segment of loyalty members who spent over $500 and opted in to SMS", "give me a list of customers who bought Oreoz in the last 30 days", "segment lapsed customers inactive 60+ days who consent to email".',
     input_schema: {
@@ -3662,6 +3753,7 @@ async function executeTool(name, input) {
     if (name === 'get_discount_elasticity')   return await computeDiscountElasticity(input.start_date, input.end_date);
     if (name === 'get_brand_comparison')      return await computeBrandComparison(input.brand_a, input.brand_b, input.start_date, input.end_date);
     if (name === 'generate_csv')              return await generateCsvReport(input.report_type, input.start_date, input.end_date);
+    if (name === 'get_top_customer_categories') return await computeTopCustomerCategories(input.days, input.limit, input.start_date, input.end_date);
     if (name === 'build_customer_segment')  return await buildCustomerSegment(input);
     return {error: 'Unknown tool: ' + name};
   } catch(e) { return {error: e.message}; }
