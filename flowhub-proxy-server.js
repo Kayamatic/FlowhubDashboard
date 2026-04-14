@@ -691,8 +691,13 @@ button:active{background:#b07d20}
 if (LEGACY_PASS || fs.existsSync(USERS_FILE)) {
   app.use(express.urlencoded({ extended: false }));
 
-  // Login page
+  // Login page — skip if already authenticated
   app.get('/login', function(req, res) {
+    const cookies = parseCookies(req);
+    if (cookies.dash_sess) {
+      const sess = _sessGet.get(cookies.dash_sess, Date.now());
+      if (sess) return res.redirect('/dashboard.html');
+    }
     const msg = req.query.reset  ? '<div class="ok">Password updated — please sign in.</div>'
               : req.query.err    ? '<div class="err">Incorrect username or password.</div>'
               : '';
