@@ -648,7 +648,14 @@ const LOGIN_PAGE = `<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>617THC · Analytics</title>
+<link rel="icon" type="image/png" href="/diggory_favicon2.png">
+<link rel="apple-touch-icon" href="/DIGGORY_icon.png">
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#141414">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Diggory">
+<title>Diggory · Analytics</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#0d0d0d;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:16px}
@@ -679,7 +686,7 @@ button:active{background:#b07d20}
   <div class="forgot"><a href="/forgot-password">Forgot password?</a></div>
   <button type="submit">Sign In</button>
 </form>
-</div></body></html>`;
+</div><script>if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(function(){});</script></body></html>`;
 
 if (LEGACY_PASS || fs.existsSync(USERS_FILE)) {
   app.use(express.urlencoded({ extended: false }));
