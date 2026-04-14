@@ -9,7 +9,7 @@
   "orientation": "any",
   "icons": [
     {
-      "src": "/DIGGORY_icon.png",
+      "src": "/diggory_favicon2.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
