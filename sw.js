@@ -1,12 +1,19 @@
 // Diggory Service Worker — controls caching for PWA mode
-// Strategy: API calls always hit the network (server caching handles speed).
-//           Static assets use network-first with cache fallback.
+// Strategy: API calls always hit the network (server-side caching handles speed).
+//           Static assets use stale-while-revalidate — serve from cache instantly,
+//           then update the cache in the background for next time.
 
-const CACHE_NAME = 'diggory-v1';
+const CACHE_NAME = 'diggory-v2';
 const STATIC_ASSETS = [
   '/dashboard.html',
+  '/js/app.js',
+  '/js/state.js',
+  '/js/sales.js',
+  '/js/inventory.js',
+  '/js/customers.js',
+  '/js/chat.js',
+  '/js/utils.js',
   '/diggory_favicon2.png',
-  '/DIGGORY_icon.png',
   '/diggory_logo_amber.png',
   '/manifest.json'
 ];
@@ -37,21 +44,22 @@ self.addEventListener('fetch', event => {
   if (url.pathname.startsWith('/api/') ||
       event.request.method !== 'GET' ||
       url.pathname === '/login') {
-    return; // fall through to default browser fetch (no service worker involvement)
+    return; // fall through to default browser fetch
   }
 
-  // Static assets — network first, cache fallback
+  // Static assets — stale-while-revalidate
+  // Serve cached version immediately (instant load), then fetch fresh copy
+  // in the background and update the cache for next time.
   event.respondWith(
-    fetch(event.request)
-      .then(response => {
-        // Clone and cache the fresh response
-        const clone = response.clone();
-        caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
-        return response;
+    caches.open(CACHE_NAME).then(cache =>
+      cache.match(event.request).then(cached => {
+        const networkFetch = fetch(event.request).then(response => {
+          cache.put(event.request, response.clone());
+          return response;
+        });
+        // Return cached immediately if available, otherwise wait for network
+        return cached || networkFetch;
       })
-      .catch(() => {
-        // Network failed — serve from cache if available
-        return caches.match(event.request);
-      })
+    )
   );
 });
