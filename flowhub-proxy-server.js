@@ -649,6 +649,7 @@ const PORT = process.env.PORT || 3001;
 app.use(compression());
 app.use(cors());
 app.use(express.json());
+app.get('/', function(req, res) { res.redirect('/dashboard.html'); });
 app.use(express.static(__dirname, {
   maxAge: 0,
   etag: true,
@@ -1275,7 +1276,6 @@ ${req.query.err === 'short' ? '<div class="err">Password must be at least 8 char
   });
 }
 
-app.get('/', function(req, res) { res.redirect('/dashboard.html'); });
 app.use(express.static(__dirname));
 const LOC = process.env.FLOWHUB_LOCATION_ID;
 const HDRS = {"clientId": process.env.FLOWHUB_CLIENT_ID, "key": process.env.FLOWHUB_API_KEY, "Accept": "application/json"};
