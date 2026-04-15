@@ -1701,32 +1701,38 @@ async function fetchAllOrdersCachedForTenant(start, end, tenantId) {
     });
 }
 
+// Shared customer cache per network (Flowhub customers API is org-scoped, not per-location)
+const _networkCustCache = new Map(); // networkId → { data, time, inFlight }
+
 async function fetchAllCustomersForTenant(tenantId) {
   if (tenantId === '617thc') return fetchAllCustomers();
-  const ts = getTenantState(tenantId);
-  if (ts.custCache && Date.now() - ts.custCacheTime < CUST_TTL) { console.log(`[cust:${tenantId}] returning cached ${ts.custCache.length}`); return ts.custCache; }
-  if (ts.custInFlight) { console.log(`[cust:${tenantId}] joining in-flight`); return ts.custInFlight; }
-  console.log(`[cust:${tenantId}] starting fresh fetch...`);
-  ts.custInFlight = (async () => {
-    const { hdrs, loc } = getTenantCredentials(tenantId);
+  // All stores in the same network share the same Flowhub customer pool
+  const tenantRow = db.prepare('SELECT network_id FROM tenants WHERE tenant_id = ?').get(tenantId);
+  const networkId = (tenantRow && tenantRow.network_id) || tenantId;
+  let nc = _networkCustCache.get(networkId);
+  if (!nc) { nc = { data: null, time: 0, inFlight: null }; _networkCustCache.set(networkId, nc); }
+  if (nc.data && Date.now() - nc.time < CUST_TTL) return nc.data;
+  if (nc.inFlight) { console.log(`[cust:${networkId}] joining in-flight`); return nc.inFlight; }
+  console.log(`[cust:${networkId}] starting fresh customer fetch...`);
+  const { hdrs } = getTenantCredentials(tenantId);
+  nc.inFlight = (async () => {
     let all = [], page = 1;
     while (true) {
-      console.log(`[cust:${tenantId}] fetching page ${page}...`);
+      if (page % 10 === 1) console.log(`[cust:${networkId}] fetching page ${page}...`);
       const r = await fetch(`https://api.flowhub.co/v1/customers/?page_size=500&page=${page}`, { headers: hdrs, signal: AbortSignal.timeout(30000) });
       const d = await r.json();
       const customers = d.data || (Array.isArray(d) ? d : []);
-      console.log(`[cust:${tenantId}] page ${page}: ${customers.length} customers`);
       if (!customers.length) break;
       all = all.concat(customers);
       if (customers.length < 500) break;
       page++;
       await new Promise(r => setTimeout(r, 200));
     }
-    ts.custCache = all; ts.custCacheTime = Date.now();
-    console.log(`[cust:${tenantId}] cached ${all.length} customers`);
+    nc.data = all; nc.time = Date.now();
+    console.log(`[cust:${networkId}] cached ${all.length} customers`);
     return all;
-  })().catch(e => { console.error(`[cust:${tenantId}] fetch error:`, e.message); ts.custInFlight = null; return []; });
-  try { return await ts.custInFlight; } finally { ts.custInFlight = null; }
+  })().catch(e => { console.error(`[cust:${networkId}] fetch error:`, e.message); return []; });
+  try { return await nc.inFlight; } finally { nc.inFlight = null; }
 }
 
 // ── Admin endpoints — tenant management (owner-only, scoped by network_id) ───
