@@ -1686,7 +1686,13 @@ async function fetchAllOrdersCachedForTenant(start, end, tenantId) {
     }));
   }
 
-  if (fetches.length) await Promise.all(fetches);
+  if (fetches.length) {
+    // Don't block forever — if API is slow, return cached data after 10s
+    await Promise.race([
+      Promise.all(fetches),
+      new Promise(r => setTimeout(r, 10000))
+    ]);
+  }
 
   // Return filtered slice from tenant's DB
   const s0 = tzDayStart(start, tz), s1 = tzDayEnd(end, tz);
@@ -1719,7 +1725,7 @@ async function fetchAllCustomersForTenant(tenantId) {
     let all = [], page = 1;
     while (true) {
       if (page % 10 === 1) console.log(`[cust:${networkId}] fetching page ${page}...`);
-      const r = await fetch(`https://api.flowhub.co/v1/customers/?page_size=500&page=${page}`, { headers: hdrs, signal: AbortSignal.timeout(30000) });
+      const r = await fetch(`https://api.flowhub.co/v1/customers/?page_size=500&page=${page}`, { headers: hdrs, signal: AbortSignal.timeout(60000) });
       const d = await r.json();
       const customers = d.data || (Array.isArray(d) ? d : []);
       if (!customers.length) break;
