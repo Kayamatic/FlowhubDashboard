@@ -2578,20 +2578,26 @@ async function computeNewVsReturning(days, startDate, endDate) {
   const now = new Date();
   const end = endDate || now.toISOString().slice(0, 10);
   const start = startDate || new Date(now.getTime() - (days || 30) * MS_PER_DAY).toISOString().slice(0, 10);
+  const tid = currentTenantId();
 
-  const [orders, allCustomers] = await Promise.all([
-    fetchAllOrdersCached(start, end),
-    fetchAllCustomers()
-  ]);
-
+  const orders = await fetchAllOrdersCached(start, end);
   const sold = orders.filter(o => o.orderStatus === 'sold');
 
-  // Build lookup: customerId -> createdAt
+  // Build lookup: customerId -> first-ever order date (createdAt)
+  // For tenant stores use order history directly — more accurate than Flowhub customer API
+  // which only has partial data. For 617thc use the full customer list.
   const custMap = {};
-  allCustomers.forEach(c => {
-    const id = c.id || c._id || c.customerId;
-    if (id) custMap[id] = c.createdAt || null;
-  });
+  if (tid !== '617thc') {
+    buildCustomersFromOrders(tid).forEach(c => {
+      custMap[c._id] = c.createdAt || null;
+    });
+  } else {
+    const allCustomers = await fetchAllCustomers();
+    allCustomers.forEach(c => {
+      const id = c.id || c._id || c.customerId;
+      if (id) custMap[id] = c.createdAt || null;
+    });
+  }
 
   const periodStart = estDayStart(start);
 
@@ -4572,10 +4578,13 @@ async function warmCaches() {
     for (const t of mngTenants) {
       const tz = t.timezone || 'America/Los_Angeles';
       const today = new Date().toLocaleDateString('en-CA', {timeZone: tz});
-      const mo = today.slice(0, 8) + '01';
+      const oneYearBack = new Date(Date.now() - 365 * MS_PER_DAY).toLocaleDateString('en-CA', {timeZone: tz});
       reqCtx.run({tenantId: t.tenant_id}, () => {
         fetchInventory().catch(e => console.error(`[warmup:${t.tenant_id}] inv error:`, e.message));
-        fetchAllOrdersCached(mo, today).catch(e => console.error(`[warmup:${t.tenant_id}] orders error:`, e.message));
+        // Fetch 1 year of history so new-vs-returning calculations are accurate
+        fetchAllOrdersCached(oneYearBack, today)
+          .then(() => console.log(`[warmup:${t.tenant_id}] 1yr order history ready`))
+          .catch(e => console.error(`[warmup:${t.tenant_id}] orders error:`, e.message));
         fetchAllCustomers().catch(e => console.error(`[warmup:${t.tenant_id}] cust error:`, e.message));
       });
     }
