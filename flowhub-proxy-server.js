@@ -1541,6 +1541,28 @@ function fetchAllCustomersNonBlocking() {
 // they call the existing global functions unchanged. For new tenants they use
 // per-tenant credentials and the tenant's isolated SQLite store.
 
+// Shared raw inventory fetch per network (Flowhub inventory API is org-scoped)
+const _networkInvRaw = new Map(); // networkId → { data, time, inFlight }
+async function _fetchNetworkInventory(tenantId, hdrs) {
+  const tenantRow = db.prepare('SELECT network_id FROM tenants WHERE tenant_id = ?').get(tenantId);
+  const networkId = (tenantRow && tenantRow.network_id) || tenantId;
+  let ni = _networkInvRaw.get(networkId);
+  if (!ni) { ni = { data: null, time: 0, inFlight: null }; _networkInvRaw.set(networkId, ni); }
+  if (ni.data && Date.now() - ni.time < INV_TTL) return ni.data;
+  if (ni.inFlight) return ni.inFlight;
+  console.log(`[inv:${networkId}] fetching org-wide inventory...`);
+  ni.inFlight = (async () => {
+    const url = 'https://api.flowhub.co/v0/inventoryAnalyticsByRooms?includesNotForSaleQuantity=true';
+    const r = await fetch(url, { headers: hdrs, signal: AbortSignal.timeout(120000) });
+    if (!r.ok) throw new Error(`Flowhub inventory ${r.status}: ${(await r.text()).slice(0,200)}`);
+    const raw = await r.json();
+    ni.data = raw.data || []; ni.time = Date.now();
+    console.log(`[inv:${networkId}] org-wide: ${ni.data.length} items`);
+    return ni.data;
+  })().catch(e => { console.error(`[inv:${networkId}] fetch error:`, e.message); return []; });
+  try { return await ni.inFlight; } finally { ni.inFlight = null; }
+}
+
 async function fetchInventoryForTenant(tenantId) {
   if (tenantId === '617thc') return fetchInventory();
   const ts = getTenantState(tenantId);
@@ -1549,13 +1571,11 @@ async function fetchInventoryForTenant(tenantId) {
   const { hdrs, loc } = getTenantCredentials(tenantId);
   console.log(`[inv:${tenantId}] Fetching from Flowhub...`);
   ts.invInFlight = (async () => {
-  // Use v0 single-request endpoint (same as 617thc) — v1 pagination returns full dataset per page
-  const url = `https://api.flowhub.co/v0/inventoryAnalyticsByRooms?locationId=${loc}&includesNotForSaleQuantity=true`;
-  const r = await fetch(url, { headers: hdrs, signal: AbortSignal.timeout(120000) });
-  if (!r.ok) throw new Error(`Flowhub inventory ${r.status}: ${(await r.text()).slice(0,200)}`);
-  const raw = await r.json();
-  const allData = raw.data || [];
-  console.log(`[inv:${tenantId}] got ${allData.length} raw items`);
+  // Flowhub inventory API is org-scoped (ignores locationId param) — filter by location after fetch
+  const rawData = await _fetchNetworkInventory(tenantId, hdrs);
+  // Filter to this store's locationId
+  const allData = rawData.filter(item => item.locationId === loc);
+  console.log(`[inv:${tenantId}] ${allData.length} items at this location (of ${rawData.length} org-wide)`);
   // Aggregate multi-room rows by product ID
   const byId = {};
   for (const row of allData) {
