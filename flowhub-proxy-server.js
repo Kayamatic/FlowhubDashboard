@@ -1711,9 +1711,11 @@ async function fetchAllCustomersForTenant(tenantId) {
     const { hdrs, loc } = getTenantCredentials(tenantId);
     let all = [], page = 1;
     while (true) {
-      const r = await fetch(`https://api.flowhub.co/v1/customers/?page_size=500&page=${page}`, { headers: hdrs });
+      console.log(`[cust:${tenantId}] fetching page ${page}...`);
+      const r = await fetch(`https://api.flowhub.co/v1/customers/?page_size=500&page=${page}`, { headers: hdrs, signal: AbortSignal.timeout(30000) });
       const d = await r.json();
       const customers = d.data || (Array.isArray(d) ? d : []);
+      console.log(`[cust:${tenantId}] page ${page}: ${customers.length} customers`);
       if (!customers.length) break;
       all = all.concat(customers);
       if (customers.length < 500) break;
@@ -1721,8 +1723,9 @@ async function fetchAllCustomersForTenant(tenantId) {
       await new Promise(r => setTimeout(r, 200));
     }
     ts.custCache = all; ts.custCacheTime = Date.now();
+    console.log(`[cust:${tenantId}] cached ${all.length} customers`);
     return all;
-  })();
+  })().catch(e => { console.error(`[cust:${tenantId}] fetch error:`, e.message); ts.custInFlight = null; return []; });
   try { return await ts.custInFlight; } finally { ts.custInFlight = null; }
 }
 
