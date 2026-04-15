@@ -1985,10 +1985,12 @@ app.get("/api/sales-stats", async(q,s) => {
     const mo = [weekStartStr,monthStartStr,lastMonthStartStr,monthBeforeLastStartStr,weekBeforeLastStartStr,fourWeeksBackStr].sort()[0];
 
     console.log(`[sales-stats:${tid}] fetching orders ${mo}→${todayStr} + customers...`);
-    const [orders, customers] = await Promise.all([
-      fetchAllOrdersCached(mo, todayStr),
-      fetchAllCustomersNonBlocking()
-    ]);
+    const ordersP = fetchAllOrdersCached(mo, todayStr);
+    // For non-617thc tenants, don't block on customer fetch — it can take minutes for large orgs
+    const customersP = (tid !== '617thc')
+      ? Promise.race([fetchAllCustomersNonBlocking(), new Promise(r => setTimeout(() => r([]), 5000))])
+      : fetchAllCustomersNonBlocking();
+    const [orders, customers] = await Promise.all([ordersP, customersP]);
     console.log(`[sales-stats:${tid}] got ${orders.length} orders, ${(customers||[]).length} customers`);
     const sold = orders.filter(o => o.orderStatus==='sold' && !o.voided && o.completedOn);
 
