@@ -1552,7 +1552,7 @@ async function fetchInventoryForTenant(tenantId) {
   let allData = [], page = 1;
   while (true) {
     const url = `https://api.flowhub.co/v1/inventoryAnalyticsByRooms?locationId=${loc}&includesNotForSaleQuantity=true&pageSize=1000&page=${page}`;
-    const r = await fetch(url, { headers: hdrs, signal: AbortSignal.timeout(30000) });
+    const r = await fetch(url, { headers: hdrs, signal: AbortSignal.timeout(60000) });
     const raw = await r.json();
     const batch = raw.data || (Array.isArray(raw) ? raw : []);
     if (!batch.length) break;
@@ -2144,6 +2144,16 @@ app.get("/api/sales-stats", async(q,s) => {
 
 app.get("/api/customers", async(q,s) => {
   try {
+    const tid = currentTenantId();
+    if (tid !== '617thc') {
+      // Return cached customers if available, otherwise return empty + kick off background fetch
+      const tenantRow = db.prepare('SELECT network_id FROM tenants WHERE tenant_id = ?').get(tid);
+      const nid = (tenantRow && tenantRow.network_id) || tid;
+      const nc = _networkCustCache.get(nid);
+      if (nc && nc.data) { return s.json({data: nc.data, total: nc.data.length}); }
+      fetchAllCustomers().catch(() => {}); // warm in background
+      return s.json({data: [], total: 0, warming: true});
+    }
     const all = await fetchAllCustomers();
     s.json({data: all, total: all.length});
   } catch(e) { s.status(500).json({error: e.message}); }
