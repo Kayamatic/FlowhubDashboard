@@ -1551,7 +1551,7 @@ async function fetchInventoryForTenant(tenantId) {
   ts.invInFlight = (async () => {
   // Use v0 single-request endpoint (same as 617thc) — v1 pagination returns full dataset per page
   const url = `https://api.flowhub.co/v0/inventoryAnalyticsByRooms?locationId=${loc}&includesNotForSaleQuantity=true`;
-  const r = await fetch(url, { headers: hdrs, signal: AbortSignal.timeout(60000) });
+  const r = await fetch(url, { headers: hdrs, signal: AbortSignal.timeout(120000) });
   if (!r.ok) throw new Error(`Flowhub inventory ${r.status}: ${(await r.text()).slice(0,200)}`);
   const raw = await r.json();
   const allData = raw.data || [];
@@ -1734,7 +1734,7 @@ async function fetchAllCustomersForTenant(tenantId) {
   nc.inFlight = (async () => {
     const seen = new Set();
     let all = [], page = 1, dupeStreak = 0;
-    while (page <= 200) { // safety cap — 200 pages × 500 = 100k max
+    while (page <= 100) { // safety cap — 100 pages × 500 = 50k max (MNG full chain has 700k+)
       if (page % 10 === 1) console.log(`[cust:${networkId}] fetching page ${page}...`);
       const r = await fetch(`https://api.flowhub.co/v1/customers/?page_size=500&page=${page}`, { headers: hdrs, signal: AbortSignal.timeout(60000) });
       const d = await r.json();
