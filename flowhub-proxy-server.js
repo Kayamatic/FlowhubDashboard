@@ -2154,7 +2154,11 @@ app.get("/api/customer-stats", async(q,s) => {
   try {
     const now = new Date();
     const tz = currentTimezone();
-    const customers = await fetchAllCustomersNonBlocking();
+    const tid = currentTenantId();
+    // For non-617thc tenants, don't block on slow customer fetch — use 5s race
+    const customers = tid !== '617thc'
+      ? await Promise.race([fetchAllCustomersNonBlocking(), new Promise(r => setTimeout(() => r([]), 5000))])
+      : await fetchAllCustomersNonBlocking();
     const t7   = new Date(now.getTime() -  7 * MS_PER_DAY);
     const t30  = new Date(now.getTime() - 30 * MS_PER_DAY);
     const t60  = new Date(now.getTime() - 60 * MS_PER_DAY);
