@@ -2692,6 +2692,39 @@ async function _storeTopProducts(tenantId, start, end, limit) {
   });
 }
 
+async function _storeCustomersByProduct(tenantId, start, end, keyword) {
+  return new Promise((resolve) => {
+    reqCtx.run({ tenantId }, async () => {
+      try {
+        const orders = (await fetchAllOrdersCached(start, end)).filter(o => o.orderStatus === 'sold' && !o.voided);
+        const kw = keyword.toLowerCase().trim();
+        // Normalize preroll synonyms
+        const terms = kw.match(/pre.?roll|joint|prj/) ? ['preroll', 'pre-roll', 'joint', 'prj'] : [kw];
+        const uniqueCustomers = new Set();
+        let matchingTransactions = 0;
+        let totalUnits = 0;
+        orders.forEach(o => {
+          const matched = (o.itemsInCart || []).some(i => {
+            const n = (i.productName || '').toLowerCase();
+            const c = (i.category || '').toLowerCase();
+            return terms.some(t => n.includes(t) || c.includes(t));
+          });
+          if (matched) {
+            matchingTransactions++;
+            if (o.customerId) uniqueCustomers.add(o.customerId);
+            (o.itemsInCart || []).forEach(i => {
+              const n = (i.productName || '').toLowerCase();
+              const c = (i.category || '').toLowerCase();
+              if (terms.some(t => n.includes(t) || c.includes(t))) totalUnits += (i.quantity || 1);
+            });
+          }
+        });
+        resolve({ uniqueCustomers: uniqueCustomers.size, transactions: matchingTransactions, units: totalUnits });
+      } catch(e) { resolve({ uniqueCustomers: 0, transactions: 0, units: 0, error: e.message }); }
+    });
+  });
+}
+
 // Validate that all requested store IDs belong to the current user's network
 function _validateStores(storeIds, networkId) {
   const valid = db.prepare(
@@ -2700,7 +2733,7 @@ function _validateStores(storeIds, networkId) {
   return valid;
 }
 
-async function computeCompareStores(storeIds, metric, start, end, limit) {
+async function computeCompareStores(storeIds, metric, start, end, limit, keyword) {
   const networkId = getNetworkId(currentTenantId());
   const validIds = _validateStores(storeIds, networkId);
   if (!validIds.length) return { error: 'No valid stores found in your network for: ' + storeIds.join(', ') };
@@ -2718,8 +2751,12 @@ async function computeCompareStores(storeIds, metric, start, end, limit) {
   } else if (metric === 'top_products' || metric === 'products') {
     const tops = await Promise.all(validIds.map(id => _storeTopProducts(id, start, end, limit || 10)));
     validIds.forEach((id, i) => { results[id] = { store: nameMap[id] || id, topProducts: tops[i] }; });
+  } else if (metric === 'customers_by_product') {
+    if (!keyword) return { error: 'customers_by_product requires a keyword parameter' };
+    const counts = await Promise.all(validIds.map(id => _storeCustomersByProduct(id, start, end, keyword)));
+    validIds.forEach((id, i) => { results[id] = { store: nameMap[id] || id, keyword, ...counts[i] }; });
   } else {
-    return { error: `Unknown metric "${metric}". Use: revenue, top_customers, top_products` };
+    return { error: `Unknown metric "${metric}". Use: revenue, top_customers, top_products, customers_by_product` };
   }
 
   return { startDate: start, endDate: end, metric: metric || 'revenue', stores: results };
@@ -4195,12 +4232,13 @@ const TOOLS = [
   },
   {
     name: 'compare_stores',
-    description: 'Compares two or more stores in your network side-by-side on a chosen metric. Use when someone asks to compare stores, "Newport vs Santa Ana", "which store did better", "top customers at each location", or "top products at each store". Requires store tenant_ids from the store roster in your context.',
+    description: 'Compares two or more stores in your network side-by-side on a chosen metric. Use when someone asks to compare stores, "Newport vs Santa Ana", "which store did better", "top customers at each location", "top products at each store", or "how many customers bought [product/brand/category] at each store". For product/brand/category customer counts across stores, use metric="customers_by_product" with a keyword. The keyword matches product name, brand, category, and weight — e.g. "preroll", "Stiiizy", "flower", "3.5g", "edible". Requires store tenant_ids from the store roster in your context.',
     input_schema: {
       type: 'object',
       properties: {
         store_ids:  { type: 'array', items: { type: 'string' }, description: 'Array of tenant_ids to compare. E.g. ["mng-newport", "mng-santa-ana"]. Use tenant IDs from the store roster.' },
-        metric:     { type: 'string', enum: ['revenue', 'top_customers', 'top_products'], description: 'What to compare: "revenue" (default) for sales summary, "top_customers" for top spenders at each store, "top_products" for top sellers at each store.' },
+        metric:     { type: 'string', enum: ['revenue', 'top_customers', 'top_products', 'customers_by_product'], description: 'What to compare: "revenue" (default) for sales summary, "top_customers" for top spenders at each store, "top_products" for top sellers at each store, "customers_by_product" for unique customer count who bought a specific product/category at each store (requires keyword).' },
+        keyword:    { type: 'string', description: 'For customers_by_product: product name, brand, or category to match. E.g. "preroll", "edible", "Stiiizy", "flower". Preroll synonyms (joint, pre-roll, prj) are normalized automatically.' },
         start_date: { type: 'string', description: 'Start date YYYY-MM-DD' },
         end_date:   { type: 'string', description: 'End date YYYY-MM-DD' },
         limit:      { type: 'number', description: 'For top_customers or top_products: how many to return per store (default 20 for customers, 10 for products)' }
@@ -4306,7 +4344,7 @@ async function executeTool(name, input) {
     if (name === 'generate_csv')              return await generateCsvReport(input.report_type, input.start_date, input.end_date);
     if (name === 'get_top_customer_categories') return await computeTopCustomerCategories(input.days, input.limit, input.start_date, input.end_date);
     if (name === 'build_customer_segment')  return await buildCustomerSegment(input);
-    if (name === 'compare_stores')      return await computeCompareStores(input.store_ids, input.metric, input.start_date, input.end_date, input.limit);
+    if (name === 'compare_stores')      return await computeCompareStores(input.store_ids, input.metric, input.start_date, input.end_date, input.limit, input.keyword);
     if (name === 'rank_stores')         return await computeRankStores(input.metric, input.start_date, input.end_date);
     if (name === 'get_network_summary') return await computeNetworkSummary(input.start_date, input.end_date);
     return {error: 'Unknown tool: ' + name};
@@ -4333,6 +4371,7 @@ TOOL SELECTION RULES:
 - When a user asks how many of a product type were sold "each day", "per day", "daily", "past N days", or "last N days", ALWAYS use get_daily_sku_sales — NOT get_weekly_sku_sales. get_weekly_sku_sales groups by week and will NOT answer per-day questions correctly.
 - When a user asks about margin, profit, gross profit, or COGS for a product type broken down by day, ALWAYS use get_daily_sku_margin. Never use get_margin_analysis for per-day breakdowns — it only returns aggregate totals.
 - The keyword parameter in get_weekly_sku_sales, get_daily_sku_sales, and get_daily_sku_margin searches across product name, brand, AND category. So keyword "Joint" matches all products in the Joint category, and keyword "Stiiizy" matches all Stiiizy brand products. These tools are the best choice for category or brand breakdowns over time.
+- When comparing how many customers bought a product, brand, category, or SKU across two or more stores (e.g. "how many customers bought prerolls in Newport vs Santa Ana"), ALWAYS use compare_stores with metric="customers_by_product" and the appropriate keyword. Never use get_daily_sku_sales or get_transactions_by_product for cross-store customer counts.
 - When the user asks for a table, spreadsheet, CSV, export, or download of data (e.g. "give me hourly transactions", "export daily revenue", "download a breakdown"), ALWAYS use generate_csv. Choose the most appropriate report_type: hourly_by_day for hour-by-day grids, hourly_by_weekday for weekday patterns, daily_summary for per-day totals, weekly_summary for per-week totals, top_products for product rankings, hourly_heatmap for aggregate hour-of-day averages. After calling generate_csv, confirm what was generated and tell the user the download button will appear below.
 
 LOYALTY DATA (Alpine IQ Integration):
