@@ -1821,10 +1821,18 @@ async function getStoreCustomers(tenantId) {
   }
   const storeIds = getStoreCustomerIds(tenantId);
   if (!storeIds) return allCustomers;
-  return allCustomers.filter(c => {
+  const filtered = allCustomers.filter(c => {
     const id = c.id || c._id || c.customerId;
     return id && storeIds.has(id);
   });
+  console.log(`[cust:${tenantId}] filtered ${allCustomers.length} network customers → ${filtered.length} store customers (${storeIds.size} order IDs)`);
+  if (!filtered.length && storeIds.size > 0 && allCustomers.length > 0) {
+    // Debug: log sample IDs to diagnose mismatch
+    const sampleCust = allCustomers.slice(0,3).map(c => c.id || c._id || c.customerId);
+    const sampleOrder = Array.from(storeIds).slice(0,3);
+    console.log(`[cust:${tenantId}] ID MISMATCH — customer IDs: ${JSON.stringify(sampleCust)}, order IDs: ${JSON.stringify(sampleOrder)}`);
+  }
+  return filtered;
 }
 
 // ── Admin endpoints — tenant management (owner-only, scoped by network_id) ───
