@@ -1759,6 +1759,32 @@ async function fetchAllCustomersForTenant(tenantId) {
   try { return await nc.inFlight; } finally { nc.inFlight = null; }
 }
 
+// ── Per-store customer filtering ──────────────────────────────────────────────
+// Flowhub customers API is org-scoped (returns all 700k+ for MNG's 21-store chain).
+// Filter down to customers who have actually ordered at the current store's location.
+function getStoreCustomerIds(tenantId) {
+  if (tenantId === '617thc') return null; // 617thc is single-store, no filtering needed
+  const ts = getTenantState(tenantId);
+  if (!ts) return null;
+  const rows = ts.db.prepare('SELECT DISTINCT json_extract(data, "$.customerId") AS cid FROM orders WHERE json_extract(data, "$.customerId") IS NOT NULL').all();
+  return new Set(rows.map(r => r.cid));
+}
+
+async function getStoreCustomers(tenantId) {
+  if (tenantId === '617thc') return fetchAllCustomersNonBlocking();
+  const allCustomers = await Promise.race([
+    fetchAllCustomersForTenant(tenantId),
+    new Promise(r => setTimeout(() => r(null), 5000))
+  ]);
+  if (!allCustomers || !allCustomers.length) return [];
+  const storeIds = getStoreCustomerIds(tenantId);
+  if (!storeIds) return allCustomers;
+  return allCustomers.filter(c => {
+    const id = c.id || c._id || c.customerId;
+    return id && storeIds.has(id);
+  });
+}
+
 // ── Admin endpoints — tenant management (owner-only, scoped by network_id) ───
 app.get('/api/admin/tenants', requireOwner, (req, res) => {
   try {
@@ -2016,10 +2042,8 @@ app.get("/api/sales-stats", async(q,s) => {
 
     console.log(`[sales-stats:${tid}] fetching orders ${mo}→${todayStr} + customers...`);
     const ordersP = fetchAllOrdersCached(mo, todayStr);
-    // For non-617thc tenants, don't block on customer fetch — it can take minutes for large orgs
-    const customersP = (tid !== '617thc')
-      ? Promise.race([fetchAllCustomersNonBlocking(), new Promise(r => setTimeout(() => r([]), 5000))])
-      : fetchAllCustomersNonBlocking();
+    // For non-617thc tenants, use store-filtered customers (only those who ordered at this location)
+    const customersP = (tid !== '617thc') ? getStoreCustomers(tid) : fetchAllCustomersNonBlocking();
     const [orders, customers] = await Promise.all([ordersP, customersP]);
     console.log(`[sales-stats:${tid}] got ${orders.length} orders, ${(customers||[]).length} customers`);
     const sold = orders.filter(o => o.orderStatus==='sold' && !o.voided && o.completedOn);
@@ -2148,13 +2172,9 @@ app.get("/api/customers", async(q,s) => {
   try {
     const tid = currentTenantId();
     if (tid !== '617thc') {
-      // Return cached customers if available, otherwise return empty + kick off background fetch
-      const tenantRow = db.prepare('SELECT network_id FROM tenants WHERE tenant_id = ?').get(tid);
-      const nid = (tenantRow && tenantRow.network_id) || tid;
-      const nc = _networkCustCache.get(nid);
-      if (nc && nc.data) { return s.json({data: nc.data, total: nc.data.length}); }
-      fetchAllCustomers().catch(() => {}); // warm in background
-      return s.json({data: [], total: 0, warming: true});
+      // Return store-filtered customers (only those who've ordered at this location)
+      const filtered = await getStoreCustomers(tid);
+      return s.json({data: filtered, total: filtered.length});
     }
     const all = await fetchAllCustomers();
     s.json({data: all, total: all.length});
@@ -2167,9 +2187,9 @@ app.get("/api/customer-stats", async(q,s) => {
     const now = new Date();
     const tz = currentTimezone();
     const tid = currentTenantId();
-    // For non-617thc tenants, don't block on slow customer fetch — use 5s race
+    // For non-617thc tenants, use store-filtered customers (only those who ordered at this location)
     const customers = tid !== '617thc'
-      ? await Promise.race([fetchAllCustomersNonBlocking(), new Promise(r => setTimeout(() => r([]), 5000))])
+      ? await getStoreCustomers(tid)
       : await fetchAllCustomersNonBlocking();
     const t7   = new Date(now.getTime() -  7 * MS_PER_DAY);
     const t30  = new Date(now.getTime() - 30 * MS_PER_DAY);
