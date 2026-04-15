@@ -1549,19 +1549,13 @@ async function fetchInventoryForTenant(tenantId) {
   const { hdrs, loc } = getTenantCredentials(tenantId);
   console.log(`[inv:${tenantId}] Fetching from Flowhub...`);
   ts.invInFlight = (async () => {
-  let allData = [], page = 1;
-  while (true) {
-    const url = `https://api.flowhub.co/v1/inventoryAnalyticsByRooms?locationId=${loc}&includesNotForSaleQuantity=true&pageSize=1000&page=${page}`;
-    const r = await fetch(url, { headers: hdrs, signal: AbortSignal.timeout(60000) });
-    const raw = await r.json();
-    const batch = raw.data || (Array.isArray(raw) ? raw : []);
-    if (!batch.length) break;
-    allData = allData.concat(batch);
-    if (page % 5 === 0) console.log(`[inv:${tenantId}] page ${page}: ${allData.length} items so far...`);
-    if (batch.length < 1000) break;
-    page++;
-    await new Promise(r => setTimeout(r, 200));
-  }
+  // Use v0 single-request endpoint (same as 617thc) — v1 pagination returns full dataset per page
+  const url = `https://api.flowhub.co/v0/inventoryAnalyticsByRooms?locationId=${loc}&includesNotForSaleQuantity=true`;
+  const r = await fetch(url, { headers: hdrs, signal: AbortSignal.timeout(60000) });
+  if (!r.ok) throw new Error(`Flowhub inventory ${r.status}: ${(await r.text()).slice(0,200)}`);
+  const raw = await r.json();
+  const allData = raw.data || [];
+  console.log(`[inv:${tenantId}] got ${allData.length} raw items`);
   // Aggregate multi-room rows by product ID
   const byId = {};
   for (const row of allData) {
@@ -1738,20 +1732,28 @@ async function fetchAllCustomersForTenant(tenantId) {
   console.log(`[cust:${networkId}] starting fresh customer fetch...`);
   const { hdrs } = getTenantCredentials(tenantId);
   nc.inFlight = (async () => {
-    let all = [], page = 1;
-    while (true) {
+    const seen = new Set();
+    let all = [], page = 1, dupeStreak = 0;
+    while (page <= 200) { // safety cap — 200 pages × 500 = 100k max
       if (page % 10 === 1) console.log(`[cust:${networkId}] fetching page ${page}...`);
       const r = await fetch(`https://api.flowhub.co/v1/customers/?page_size=500&page=${page}`, { headers: hdrs, signal: AbortSignal.timeout(60000) });
       const d = await r.json();
       const customers = d.data || (Array.isArray(d) ? d : []);
       if (!customers.length) break;
-      all = all.concat(customers);
+      // Deduplicate — stop if a full page is all duplicates
+      let newCount = 0;
+      for (const c of customers) {
+        const id = c._id || c.id || c.email || JSON.stringify(c).slice(0,100);
+        if (!seen.has(id)) { seen.add(id); all.push(c); newCount++; }
+      }
+      if (newCount === 0) { dupeStreak++; if (dupeStreak >= 2) { console.log(`[cust:${networkId}] stopping — ${dupeStreak} consecutive all-dupe pages`); break; } }
+      else { dupeStreak = 0; }
       if (customers.length < 500) break;
       page++;
       await new Promise(r => setTimeout(r, 200));
     }
     nc.data = all; nc.time = Date.now();
-    console.log(`[cust:${networkId}] cached ${all.length} customers`);
+    console.log(`[cust:${networkId}] cached ${all.length} unique customers (scanned ${page} pages)`);
     return all;
   })().catch(e => { console.error(`[cust:${networkId}] fetch error:`, e.message); return []; });
   try { return await nc.inFlight; } finally { nc.inFlight = null; }
