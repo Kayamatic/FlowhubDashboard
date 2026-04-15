@@ -1754,7 +1754,7 @@ async function fetchAllCustomersForTenant(tenantId) {
   nc.inFlight = (async () => {
     const seen = new Set();
     let all = [], page = 1, dupeStreak = 0;
-    while (page <= 100) { // safety cap — 100 pages × 500 = 50k max (MNG full chain has 700k+)
+    while (page <= 40) { // safety cap — 40 pages × 500 = 20k max
       if (page % 10 === 1) console.log(`[cust:${networkId}] fetching page ${page}...`);
       const r = await fetch(`https://api.flowhub.co/v1/customers/?page_size=500&page=${page}`, { headers: hdrs, signal: AbortSignal.timeout(60000) });
       const d = await r.json();
@@ -1792,11 +1792,33 @@ function getStoreCustomerIds(tenantId) {
 
 async function getStoreCustomers(tenantId) {
   if (tenantId === '617thc') return fetchAllCustomersNonBlocking();
-  const allCustomers = await Promise.race([
-    fetchAllCustomersForTenant(tenantId),
-    new Promise(r => setTimeout(() => r(null), 5000))
-  ]);
-  if (!allCustomers || !allCustomers.length) return [];
+  // Stale-while-revalidate: if network cache has data, use it immediately
+  const tenantRow = db.prepare('SELECT network_id FROM tenants WHERE tenant_id = ?').get(tenantId);
+  const networkId = (tenantRow && tenantRow.network_id) || tenantId;
+  const nc = _networkCustCache.get(networkId);
+  let allCustomers;
+  if (nc && nc.data) {
+    // Cache has data — use immediately, trigger bg refresh if stale
+    allCustomers = nc.data;
+    if (Date.now() - nc.time >= CUST_TTL) {
+      fetchAllCustomersForTenant(tenantId).catch(e => console.error(`[cust:${networkId}] bg refresh error:`, e.message));
+    }
+  } else {
+    // No cache yet — wait briefly for initial load
+    allCustomers = await Promise.race([
+      fetchAllCustomersForTenant(tenantId),
+      new Promise(r => setTimeout(() => r(null), 10000))
+    ]);
+  }
+  if (!allCustomers || !allCustomers.length) {
+    // Cache still warming — return synthetic customer list from order history
+    const storeIds = getStoreCustomerIds(tenantId);
+    if (storeIds && storeIds.size > 0) {
+      console.log(`[cust:${tenantId}] cache warming, returning ${storeIds.size} customers from order history`);
+      return Array.from(storeIds).map(id => ({ _id: id, id: id }));
+    }
+    return [];
+  }
   const storeIds = getStoreCustomerIds(tenantId);
   if (!storeIds) return allCustomers;
   return allCustomers.filter(c => {
