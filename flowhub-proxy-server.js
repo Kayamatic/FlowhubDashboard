@@ -1783,56 +1783,47 @@ async function fetchAllCustomersForTenant(tenantId) {
 // Flowhub customers API is org-scoped (returns all 700k+ for MNG's 21-store chain).
 // Filter down to customers who have actually ordered at the current store's location.
 function getStoreCustomerIds(tenantId) {
-  if (tenantId === '617thc') return null; // 617thc is single-store, no filtering needed
+  if (tenantId === '617thc') return null;
   const ts = getTenantState(tenantId);
   if (!ts) return null;
   const rows = ts.db.prepare("SELECT DISTINCT json_extract(data, '$.customerId') AS cid FROM orders WHERE json_extract(data, '$.customerId') IS NOT NULL").all();
   return new Set(rows.map(r => r.cid));
 }
 
+// Build customer list from order history — each unique customerId becomes a customer record
+// with createdAt = their first order date. Used as primary source for tenant stores since
+// Flowhub's customer API is org-scoped (700k+ records) and we can't fetch all of them.
+function buildCustomersFromOrders(tenantId) {
+  const ts = getTenantState(tenantId);
+  if (!ts) return [];
+  // Get each unique customer with their first and most recent order dates
+  const rows = ts.db.prepare(`
+    SELECT
+      json_extract(data, '$.customerId') AS cid,
+      MIN(date) AS first_order,
+      MAX(date) AS last_order,
+      COUNT(*) AS order_count
+    FROM orders
+    WHERE json_extract(data, '$.customerId') IS NOT NULL
+    GROUP BY cid
+  `).all();
+  return rows.map(r => ({
+    _id: r.cid,
+    id:  r.cid,
+    createdAt:  r.first_order + 'T12:00:00.000Z', // first purchase = customer since
+    updatedAt:  r.last_order  + 'T12:00:00.000Z', // last purchase = last activity
+    orderCount: r.order_count,
+  }));
+}
+
 async function getStoreCustomers(tenantId) {
   if (tenantId === '617thc') return fetchAllCustomersNonBlocking();
-  // Stale-while-revalidate: if network cache has data, use it immediately
-  const tenantRow = db.prepare('SELECT network_id FROM tenants WHERE tenant_id = ?').get(tenantId);
-  const networkId = (tenantRow && tenantRow.network_id) || tenantId;
-  const nc = _networkCustCache.get(networkId);
-  let allCustomers;
-  if (nc && nc.data) {
-    // Cache has data — use immediately, trigger bg refresh if stale
-    allCustomers = nc.data;
-    if (Date.now() - nc.time >= CUST_TTL) {
-      fetchAllCustomersForTenant(tenantId).catch(e => console.error(`[cust:${networkId}] bg refresh error:`, e.message));
-    }
-  } else {
-    // No cache yet — wait briefly for initial load
-    allCustomers = await Promise.race([
-      fetchAllCustomersForTenant(tenantId),
-      new Promise(r => setTimeout(() => r(null), 10000))
-    ]);
-  }
-  if (!allCustomers || !allCustomers.length) {
-    // Cache still warming — return synthetic customer list from order history
-    const storeIds = getStoreCustomerIds(tenantId);
-    if (storeIds && storeIds.size > 0) {
-      console.log(`[cust:${tenantId}] cache warming, returning ${storeIds.size} customers from order history`);
-      return Array.from(storeIds).map(id => ({ _id: id, id: id }));
-    }
-    return [];
-  }
-  const storeIds = getStoreCustomerIds(tenantId);
-  if (!storeIds) return allCustomers;
-  const filtered = allCustomers.filter(c => {
-    const id = c.id || c._id || c.customerId;
-    return id && storeIds.has(id);
-  });
-  console.log(`[cust:${tenantId}] filtered ${allCustomers.length} network customers → ${filtered.length} store customers (${storeIds.size} order IDs)`);
-  if (!filtered.length && storeIds.size > 0 && allCustomers.length > 0) {
-    // Debug: log sample IDs to diagnose mismatch
-    const sampleCust = allCustomers.slice(0,3).map(c => c.id || c._id || c.customerId);
-    const sampleOrder = Array.from(storeIds).slice(0,3);
-    console.log(`[cust:${tenantId}] ID MISMATCH — customer IDs: ${JSON.stringify(sampleCust)}, order IDs: ${JSON.stringify(sampleOrder)}`);
-  }
-  return filtered;
+  // For multi-store chains: build from order history (accurate per-store data).
+  // Flowhub customers API is org-scoped with 700k+ records — we can't paginate all of them,
+  // and the store-specific customers are scattered across pages we'd never reach.
+  const customers = buildCustomersFromOrders(tenantId);
+  console.log(`[cust:${tenantId}] built ${customers.length} customers from order history`);
+  return customers;
 }
 
 // ── Admin endpoints — tenant management (owner-only, scoped by network_id) ───
