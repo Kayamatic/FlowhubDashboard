@@ -197,6 +197,7 @@ function getTenantState(tenantId) {
   const state = {
     db:           storeDb,
     invCache:     null, invCacheTime:  0,
+    invInFlight:  null,
     custCache:    null, custCacheTime: 0,
     custInFlight: null,
     statsCache:   null, statsCacheTime: 0,
@@ -1356,8 +1357,18 @@ app.get("/api/session-info", (q,s) => {
   s.json({ demo: q.demoMode || false, user: q.dashUser || null, tenantId: q.tenantId || '617thc', tenants: q.userTenants || [], role: q.userRole || 'store_manager', logoUrl: tenantRow && tenantRow.logo_url || null, tenantName: tenantRow && tenantRow.name || null });
 });
 app.get("/api/inventory", async(q,s) => {
-  try { s.setHeader('Cache-Control','private,max-age=300'); s.json(await fetchInventory()); }
-  catch(e) { s.status(500).json({error: e.message}); }
+  try {
+    const tid = currentTenantId();
+    // For non-617thc tenants, don't block on slow inventory fetch — return empty if not cached
+    if (tid !== '617thc') {
+      const ts = getTenantState(tid);
+      if (ts && ts.invCache) { s.setHeader('Cache-Control','private,max-age=300'); return s.json(ts.invCache); }
+      // Kick off fetch in background, return empty now so dashboard doesn't hang
+      fetchInventory().catch(() => {});
+      return s.json({data: []});
+    }
+    s.setHeader('Cache-Control','private,max-age=300'); s.json(await fetchInventory());
+  } catch(e) { s.status(500).json({error: e.message}); }
 });
 
 // ── Shared data fetchers ──────────────────────────────────────────────────────
@@ -1534,16 +1545,19 @@ async function fetchInventoryForTenant(tenantId) {
   if (tenantId === '617thc') return fetchInventory();
   const ts = getTenantState(tenantId);
   if (ts.invCache && Date.now() - ts.invCacheTime < INV_TTL) return ts.invCache;
+  if (ts.invInFlight) return ts.invInFlight;
   const { hdrs, loc } = getTenantCredentials(tenantId);
   console.log(`[inv:${tenantId}] Fetching from Flowhub...`);
+  ts.invInFlight = (async () => {
   let allData = [], page = 1;
   while (true) {
     const url = `https://api.flowhub.co/v1/inventoryAnalyticsByRooms?locationId=${loc}&includesNotForSaleQuantity=true&pageSize=1000&page=${page}`;
-    const r = await fetch(url, { headers: hdrs });
+    const r = await fetch(url, { headers: hdrs, signal: AbortSignal.timeout(30000) });
     const raw = await r.json();
     const batch = raw.data || (Array.isArray(raw) ? raw : []);
     if (!batch.length) break;
     allData = allData.concat(batch);
+    if (page % 5 === 0) console.log(`[inv:${tenantId}] page ${page}: ${allData.length} items so far...`);
     if (batch.length < 1000) break;
     page++;
     await new Promise(r => setTimeout(r, 200));
@@ -1589,6 +1603,8 @@ async function fetchInventoryForTenant(tenantId) {
   ts.invCacheTime = Date.now();
   console.log(`[inv:${tenantId}] Cached ${ts.invCache.data.length} products (was ${Object.keys(byId).length} by productId)`);
   return ts.invCache;
+  })().catch(e => { console.error(`[inv:${tenantId}] fetch error:`, e.message); return {data:[]}; });
+  try { return await ts.invInFlight; } finally { ts.invInFlight = null; }
 }
 
 async function fetchAllOrdersForTenant(start, end, tenantId) {
