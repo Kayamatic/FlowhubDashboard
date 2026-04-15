@@ -12,6 +12,13 @@ const demoDB = new Database(__dirname + '/demo.db');
 // Per-request demo context — lets compute functions detect demo mode without parameter threading
 const reqCtx = new AsyncLocalStorage();
 function isDemo() { const s = reqCtx.getStore(); return s ? s.demo : false; }
+function currentTenantId() { const s = reqCtx.getStore(); return (s && s.tenantId) || '617thc'; }
+function currentTimezone() {
+  const tid = currentTenantId();
+  if (tid === '617thc') return 'America/New_York';
+  const row = db.prepare('SELECT timezone FROM tenants WHERE tenant_id = ?').get(tid);
+  return (row && row.timezone) || 'America/New_York';
+}
 db.pragma('journal_mode = WAL');
 db.pragma('synchronous = NORMAL');
 db.exec(`
@@ -116,6 +123,10 @@ try { db.exec("ALTER TABLE tenants ADD COLUMN logo_url TEXT"); } catch(_) {}
 try { db.exec("ALTER TABLE tenants ADD COLUMN network_id TEXT"); } catch(_) {}
 // Set default network_id = tenant_id for any rows that don't have one
 db.exec("UPDATE tenants SET network_id = tenant_id WHERE network_id IS NULL");
+// Add network_id to users table (safe migration)
+try { db.exec("ALTER TABLE users ADD COLUMN network_id TEXT"); } catch(_) {}
+// Default all existing users without a network_id to '617thc'
+db.exec("UPDATE users SET network_id = '617thc' WHERE network_id IS NULL");
 
 // Ensure logos directory exists
 const LOGOS_DIR = __dirname + '/logos';
@@ -126,16 +137,39 @@ db.prepare(`INSERT OR IGNORE INTO tenants (tenant_id, name, api_key, client_id, 
             VALUES (?, ?, ?, ?, ?)`)
   .run('617thc', '617THC', process.env.FLOWHUB_API_KEY||'', process.env.FLOWHUB_CLIENT_ID||'', process.env.FLOWHUB_LOCATION_ID||'');
 
-// Migrate existing users.json users into the users table as 'owner' (idempotent)
+// Seed MNG stores (3 CA locations, shared API key, network_id links them)
+const MNG_KEY = '4d47262a-bdcf-4e77-89c1-d804b640de8f';
+const MNG_CID = 'a989d9cb-a088-46e8-869b-00a112e53209';
+const _seedTenant = db.prepare(`INSERT OR IGNORE INTO tenants (tenant_id, name, api_key, client_id, location_id, timezone, network_id)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)`);
+_seedTenant.run('mng-newport',    'MNG Newport',           MNG_KEY, MNG_CID, '542c6f24-9d5b-4ba1-aacf-95adb8f327f4', 'America/Los_Angeles', 'mng');
+_seedTenant.run('mng-santa-ana',  'MNG Santa Ana',         MNG_KEY, MNG_CID, '8d050377-ec5e-4402-984c-637d3e66fa27', 'America/Los_Angeles', 'mng');
+_seedTenant.run('mng-costa-mesa', 'MNG Costa Mesa Harbor', MNG_KEY, MNG_CID, 'c866ea21-c2b5-4464-ac23-48a09a8c0462', 'America/Los_Angeles', 'mng');
+
+// Migrate existing users.json users into the users table as 'owner' in 617thc network (idempotent)
 try {
-  const _seedUser = db.prepare('INSERT OR IGNORE INTO users (username, global_role) VALUES (?, ?)');
+  const _seedUser = db.prepare('INSERT OR IGNORE INTO users (username, global_role, network_id) VALUES (?, ?, ?)');
   const existingUsers = (() => { try { return JSON.parse(require('fs').readFileSync(__dirname + '/users.json', 'utf8')); } catch { return {}; } })();
-  Object.keys(existingUsers).filter(u => !['617Demo'].includes(u)).forEach(u => _seedUser.run(u, 'owner'));
-  if (process.env.DASH_USER) _seedUser.run(process.env.DASH_USER, 'owner');
+  Object.keys(existingUsers).filter(u => !['617Demo'].includes(u)).forEach(u => _seedUser.run(u, 'owner', '617thc'));
+  if (process.env.DASH_USER) _seedUser.run(process.env.DASH_USER, 'owner', '617thc');
+
+  // Seed MNG admin accounts (idempotent — only creates if username doesn't exist)
+  const _usersFile = __dirname + '/users.json';
+  function seedAccount(username, password, networkId) {
+    if (existingUsers[username]) return; // already in users.json
+    const hash = require('bcryptjs').hashSync(password, 12);
+    existingUsers[username] = hash;
+    fs.writeFileSync(_usersFile, JSON.stringify(existingUsers, null, 2));
+    _seedUser.run(username, 'owner', networkId);
+    console.log('[seed] created account:', username, '(network:', networkId, ')');
+  }
+  seedAccount('bill-mng', 'ChangeMe!2026', 'mng');   // Bill's MNG admin login
+  seedAccount('mng-admin', 'MngAdmin!2026', 'mng');   // Customer's MNG admin login
 } catch(e) { console.error('[users] migration error:', e.message); }
 
 // ── Per-tenant in-memory state (new tenants only; 617thc uses existing global state) ──
 const _tenantStates = new Map();
+const _activeTenant = new Map(); // username → selected tenant_id (for store switching)
 
 function getTenantState(tenantId) {
   if (tenantId === '617thc') return null; // 617thc uses existing global caches + flowhub.db
@@ -193,7 +227,7 @@ function getTenantCredentials(tenantId) {
 }
 
 // ── Role definitions ──────────────────────────────────────────────────────────
-// owner        — all stores, full admin access (add tenants, manage users)
+// owner        — admin for all stores in their network_id, full admin panel access
 // multi_store  — explicitly assigned stores only, cross-store comparison view
 // store_manager — single assigned store only, no switching
 
@@ -201,30 +235,40 @@ function getUserRole(username) {
   if (!username) return 'store_manager';
   if (DEMO_USERS && DEMO_USERS.has(username)) return 'owner';
   const row = db.prepare('SELECT global_role FROM users WHERE username = ?').get(username);
-  // Fall back to 'owner' for unmapped users (preserves behavior for legacy accounts)
   return row ? row.global_role : 'owner';
 }
 
-// Returns list of tenants a user can access based on their role
+function getUserNetworkId(username) {
+  if (!username) return '617thc';
+  if (DEMO_USERS && DEMO_USERS.has(username)) return 'demo';
+  const row = db.prepare('SELECT network_id FROM users WHERE username = ?').get(username);
+  return (row && row.network_id) || '617thc';
+}
+
+// Returns list of tenants a user can access based on their role + network
 function getUserTenants(username) {
   if (!username) return [];
   if (DEMO_USERS && DEMO_USERS.has(username)) return [{ tenant_id: 'demo', name: 'Demo Store', role: 'owner' }];
 
   const globalRole = getUserRole(username);
+  const networkId  = getUserNetworkId(username);
 
   if (globalRole === 'owner') {
-    // Owner sees every active tenant automatically — no explicit mapping needed
-    const all = db.prepare('SELECT tenant_id, name FROM tenants WHERE active = 1 ORDER BY created_at ASC').all();
-    if (!all.length) return [{ tenant_id: '617thc', name: '617THC', role: 'owner' }];
+    // Owner sees every active tenant in their network — scoped, not global
+    const all = db.prepare('SELECT tenant_id, name FROM tenants WHERE active = 1 AND network_id = ? ORDER BY created_at ASC').all(networkId);
+    if (!all.length) return [{ tenant_id: networkId, name: networkId.toUpperCase(), role: 'owner' }];
     return all.map(t => ({ ...t, role: 'owner' }));
   }
 
-  // multi_store and store_manager: constrained to explicit user_tenants rows
+  // multi_store and store_manager: constrained to explicit user_tenants rows within their network
   const rows = db.prepare(`SELECT t.tenant_id, t.name, ut.role
     FROM user_tenants ut JOIN tenants t ON t.tenant_id = ut.tenant_id
-    WHERE ut.username = ? AND t.active = 1 ORDER BY t.created_at ASC`).all(username);
+    WHERE ut.username = ? AND t.active = 1 AND t.network_id = ? ORDER BY t.created_at ASC`).all(username, networkId);
 
-  if (!rows.length) return [{ tenant_id: '617thc', name: '617THC', role: globalRole }];
+  if (!rows.length) {
+    const fallback = db.prepare('SELECT tenant_id, name FROM tenants WHERE network_id = ? AND active = 1 LIMIT 1').get(networkId);
+    return fallback ? [{ ...fallback, role: globalRole }] : [{ tenant_id: '617thc', name: '617THC', role: globalRole }];
+  }
 
   // store_manager gets exactly one store — the first assigned
   return globalRole === 'store_manager' ? [rows[0]] : rows;
@@ -1216,8 +1260,10 @@ ${req.query.err === 'short' ? '<div class="err">Password must be at least 8 char
       req.dashUser = sess.user;
       req.demoMode = sess.demo === 1 || sess.demo === true || false;
       req.userRole = getUserRole(sess.user);
+      req.networkId = getUserNetworkId(sess.user);
       const userTenants = getUserTenants(sess.user);
-      req.tenantId = (userTenants[0] && userTenants[0].tenant_id) || '617thc';
+      const override = _activeTenant.get(sess.user);
+      req.tenantId = (override && userTenants.some(t => t.tenant_id === override)) ? override : (userTenants[0] && userTenants[0].tenant_id) || '617thc';
       req.userTenants = userTenants;
       return reqCtx.run({ demo: req.demoMode, tenantId: req.tenantId, role: req.userRole }, next);
     }
@@ -1252,6 +1298,8 @@ let _invCache = null, _invCacheTime = 0;
 const INV_TTL  = 5 * 60 * 1000;
 const CUST_TTL = 30 * 60 * 1000;
 async function fetchInventory() {
+  const tid = currentTenantId();
+  if (tid !== '617thc') return fetchInventoryForTenant(tid);
   if (isDemo()) return demoFetchInventory();
   if (_invCache && Date.now() - _invCacheTime < INV_TTL) return _invCache;
   console.log('[inv] Fetching from Flowhub (all rooms)...');
@@ -1364,6 +1412,8 @@ function _evictDay(dateStr) {
 }
 
 async function fetchAllOrdersCached(start, end) {
+  const tid = currentTenantId();
+  if (tid !== '617thc') return fetchAllOrdersCachedForTenant(start, end, tid);
   if (isDemo()) { demoWarmToday(); return demoFetchOrders(start, end); }
   const today = _estToday(), yest = _estYest();
   const histEnd = end < today ? end : yest; // non-today boundary for persistent cache
@@ -1438,6 +1488,8 @@ let _salesStatsCache = null, _salesStatsCacheTime = 0;
 let _salesStatsInFlight = null; // deduplicates concurrent computes
 const STATS_RESULT_TTL = 3 * 60 * 1000; // 3 min — matches frontend refresh interval
 async function fetchAllCustomers() {
+  const tid = currentTenantId();
+  if (tid !== '617thc') return fetchAllCustomersForTenant(tid);
   if (isDemo()) return demoFetchCustomers();
   if (_custCache && Date.now() - _custCacheTime < CUST_TTL) return _custCache;
   if (_custFetchInFlight) return _custFetchInFlight; // deduplicate concurrent requests
@@ -1462,6 +1514,8 @@ async function fetchAllCustomers() {
 
 // Stale-while-revalidate: return cached customers immediately, refresh in background if stale
 function fetchAllCustomersNonBlocking() {
+  const tid = currentTenantId();
+  if (tid !== '617thc') return fetchAllCustomersForTenant(tid); // tenant fetcher has its own caching
   if (_custCache) {
     if (Date.now() - _custCacheTime >= CUST_TTL) {
       fetchAllCustomers().catch(e => console.error('[cust] bg refresh error:', e.message));
@@ -1481,11 +1535,59 @@ async function fetchInventoryForTenant(tenantId) {
   const ts = getTenantState(tenantId);
   if (ts.invCache && Date.now() - ts.invCacheTime < INV_TTL) return ts.invCache;
   const { hdrs, loc } = getTenantCredentials(tenantId);
-  const url = `https://api.flowhub.co/v1/inventoryAnalyticsByRooms?locationId=${loc}&pageSize=1000&page=1`;
-  const r = await fetch(url, { headers: hdrs });
-  const raw = await r.json();
-  const data = raw.data || (Array.isArray(raw) ? raw : []);
-  ts.invCache = { data }; ts.invCacheTime = Date.now();
+  console.log(`[inv:${tenantId}] Fetching from Flowhub...`);
+  let allData = [], page = 1;
+  while (true) {
+    const url = `https://api.flowhub.co/v1/inventoryAnalyticsByRooms?locationId=${loc}&includesNotForSaleQuantity=true&pageSize=1000&page=${page}`;
+    const r = await fetch(url, { headers: hdrs });
+    const raw = await r.json();
+    const batch = raw.data || (Array.isArray(raw) ? raw : []);
+    if (!batch.length) break;
+    allData = allData.concat(batch);
+    if (batch.length < 1000) break;
+    page++;
+    await new Promise(r => setTimeout(r, 200));
+  }
+  // Aggregate multi-room rows by product ID
+  const byId = {};
+  for (const row of allData) {
+    const id = row.productId || row.variantId || row.productName;
+    if (!byId[id]) {
+      byId[id] = Object.assign({}, row, {quantity: 0, floorQuantity: 0, vaultQuantity: 0, otherRoomQuantity: 0, roomBreakdown: {}});
+    }
+    const qty = parseInt(row.quantity || 0);
+    byId[id].quantity += qty;
+    const rn = (row.roomName || '').toLowerCase();
+    if (rn === 'sales floor') byId[id].floorQuantity += qty;
+    else if (rn === 'vault' || rn === 'moon room') byId[id].vaultQuantity += qty;
+    else byId[id].otherRoomQuantity += qty;
+    byId[id].roomBreakdown[row.roomName || 'Unknown'] = (byId[id].roomBreakdown[row.roomName || 'Unknown'] || 0) + qty;
+  }
+  // Combine METRC lots sharing same display name
+  const byName = {};
+  for (const p of Object.values(byId)) {
+    const key = (p.productName || p.variantName || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    if (!byName[key]) {
+      byName[key] = Object.assign({}, p);
+    } else {
+      byName[key].quantity          += p.quantity;
+      byName[key].floorQuantity     += p.floorQuantity;
+      byName[key].vaultQuantity     += p.vaultQuantity;
+      byName[key].otherRoomQuantity += p.otherRoomQuantity;
+      if (p.createdAt && (!byName[key].createdAt || p.createdAt > byName[key].createdAt)) {
+        byName[key].createdAt     = p.createdAt;
+        byName[key].invoiceNumber = p.invoiceNumber || byName[key].invoiceNumber;
+        byName[key].manifestId    = p.manifestId    || byName[key].manifestId;
+        byName[key].supplierName  = p.supplierName  || byName[key].supplierName;
+      }
+      for (const [room, qty] of Object.entries(p.roomBreakdown || {})) {
+        byName[key].roomBreakdown[room] = (byName[key].roomBreakdown[room] || 0) + qty;
+      }
+    }
+  }
+  ts.invCache = {data: Object.values(byName)};
+  ts.invCacheTime = Date.now();
+  console.log(`[inv:${tenantId}] Cached ${ts.invCache.data.length} products (was ${Object.keys(byId).length} by productId)`);
   return ts.invCache;
 }
 
@@ -1493,20 +1595,109 @@ async function fetchAllOrdersForTenant(start, end, tenantId) {
   if (tenantId === '617thc') return fetchAllOrders(start, end);
   const { hdrs, loc } = getTenantCredentials(tenantId);
   const endPlusOne = new Date(new Date(end+'T12:00:00Z').getTime()+MS_PER_DAY).toISOString().slice(0,10);
-  const base = `https://api.flowhub.co/v1/orders/findByLocationId/${loc}?startDate=${start}&endDate=${endPlusOne}&pageSize=1000`;
-  let all = [], page = 1, total = Infinity;
-  while (all.length < total) {
-    const r = await fetch(base + '&page=' + page, { headers: hdrs });
-    const d = await r.json();
-    const orders = d.data || d.orders || (Array.isArray(d) ? d : []);
-    if (!orders.length) break;
-    all = all.concat(orders);
-    total = d.total || d.totalCount || all.length;
-    if (all.length >= total || orders.length < 1000) break;
-    page++;
-    await new Promise(r => setTimeout(r, 200)); // rate-limit courtesy pause
+  const base = `https://api.flowhub.co/v1/orders/findByLocationId/${loc}?created_after=${encodeURIComponent(start)}&created_before=${encodeURIComponent(endPlusOne)}&page_size=500`;
+  const r1 = await fetch(base + '&page=1', { headers: hdrs });
+  const d1 = await r1.json();
+  if (!d1.orders || d1.orders.length === 0) return [];
+  const total = d1.total || d1.orders.length;
+  const totalPages = Math.ceil(total / 500);
+  if (totalPages <= 1) return d1.orders;
+  // Fetch remaining pages in batches of 10
+  const BATCH = 10;
+  const allRest = [];
+  for (let p = 2; p <= totalPages; p += BATCH) {
+    const batchResults = await Promise.all(
+      Array.from({length: Math.min(BATCH, totalPages - p + 1)},
+        (_, i) => fetch(base + '&page=' + (p + i), { headers: hdrs }).then(r => r.json())
+      )
+    );
+    allRest.push(...batchResults);
   }
-  return all;
+  return d1.orders.concat(...allRest.map(d => d.orders || []));
+}
+
+// Incremental SQLite-cached order fetcher for non-617thc tenants
+// Mirrors fetchAllOrdersCached() logic but uses per-tenant state + timezone
+async function fetchAllOrdersCachedForTenant(start, end, tenantId) {
+  const ts = getTenantState(tenantId);
+  const tz = currentTimezone();
+  const today = new Date().toLocaleDateString('en-CA', {timeZone: tz});
+  const yest = new Date(Date.now() - MS_PER_DAY).toLocaleDateString('en-CA', {timeZone: tz});
+  const histEnd = end < today ? end : yest;
+  const fetches = [];
+
+  // Tenant-specific DB ingest helpers
+  const _tInsert = ts.db.prepare('INSERT OR REPLACE INTO orders (order_id, date, data) VALUES (?, ?, ?)');
+  const _tIngest = ts.db.transaction(function(orders) {
+    for (const o of orders) {
+      const id = String(o._id || o.id || o.orderId || '');
+      if (!id) continue;
+      const t = o.completedOn || o.createdOn;
+      if (!t) continue;
+      const date = new Date(t).toLocaleDateString('en-CA', {timeZone: tz});
+      _tInsert.run(id, date, JSON.stringify(o));
+    }
+  });
+  function _tSaveMeta(k, v) { ts.db.prepare('INSERT OR REPLACE INTO cache_meta (key, value) VALUES (?, ?)').run(k, String(v)); }
+  function _tIngestOrders(orders) { _tIngest(orders.filter(o => !o.voided)); }
+
+  // 1. Need older data (before cached min)
+  if (start && (!ts.ordMin || start < ts.ordMin)) {
+    const gapEnd = ts.ordMin
+      ? new Date(new Date(ts.ordMin + 'T12:00:00Z').getTime() - MS_PER_DAY).toLocaleDateString('en-CA', {timeZone: tz})
+      : histEnd;
+    if (gapEnd && gapEnd >= start) {
+      console.log(`[ordcache:${tenantId}] hist-back ${start} → ${gapEnd}`);
+      fetches.push(fetchAllOrdersForTenant(start, gapEnd, tenantId).then(orders => {
+        _tIngestOrders(orders);
+        if (!ts.ordMin || start < ts.ordMin) { ts.ordMin = start; _tSaveMeta('ordMin', ts.ordMin); }
+        if (!ts.ordMax || gapEnd > ts.ordMax) { ts.ordMax = gapEnd; _tSaveMeta('ordMax', ts.ordMax); }
+        console.log(`[ordcache:${tenantId}] +${orders.length} orders`);
+      }));
+    }
+  }
+
+  // 2. Need newer historical data (between cached max and yesterday)
+  if (ts.ordMax && histEnd && histEnd > ts.ordMax) {
+    const gapStart = new Date(new Date(ts.ordMax + 'T12:00:00Z').getTime() + MS_PER_DAY).toLocaleDateString('en-CA', {timeZone: tz});
+    if (gapStart <= histEnd) {
+      console.log(`[ordcache:${tenantId}] hist-fwd ${gapStart} → ${histEnd}`);
+      fetches.push(fetchAllOrdersForTenant(gapStart, histEnd, tenantId).then(orders => {
+        _tIngestOrders(orders);
+        if (histEnd > ts.ordMax) { ts.ordMax = histEnd; _tSaveMeta('ordMax', ts.ordMax); }
+        console.log(`[ordcache:${tenantId}] +${orders.length} orders`);
+      }));
+    }
+  }
+
+  // 3. Today's orders — refresh if stale
+  if (end >= today && Date.now() - ts.todayTs > TODAY_TTL) {
+    console.log(`[ordcache:${tenantId}] today refresh`);
+    ts.todayTs = Date.now();
+    fetches.push(fetchAllOrdersForTenant(today, today, tenantId).then(orders => {
+      ts.db.prepare('DELETE FROM orders WHERE date = ?').run(today);
+      _tIngestOrders(orders);
+      if (!ts.ordMax || yest > ts.ordMax) { ts.ordMax = yest; _tSaveMeta('ordMax', ts.ordMax); }
+      console.log(`[ordcache:${tenantId}] today: ${orders.length} orders`);
+    }).catch(e => {
+      ts.todayTs = 0;
+      console.error(`[ordcache:${tenantId}] today refresh failed:`, e.message);
+    }));
+  }
+
+  if (fetches.length) await Promise.all(fetches);
+
+  // Return filtered slice from tenant's DB
+  const s0 = tzDayStart(start, tz), s1 = tzDayEnd(end, tz);
+  return ts.db.prepare('SELECT data FROM orders WHERE date >= ? AND date <= ?')
+    .all(start, end)
+    .map(r => JSON.parse(r.data))
+    .filter(o => {
+      const t = o.completedOn || o.createdOn;
+      if (!t) return false;
+      const d = new Date(t);
+      return d >= s0 && d <= s1;
+    });
 }
 
 async function fetchAllCustomersForTenant(tenantId) {
@@ -1518,12 +1709,12 @@ async function fetchAllCustomersForTenant(tenantId) {
     const { hdrs, loc } = getTenantCredentials(tenantId);
     let all = [], page = 1;
     while (true) {
-      const r = await fetch(`https://api.flowhub.co/v1/customers/findByLocationId/${loc}?pageSize=1000&page=${page}`, { headers: hdrs });
+      const r = await fetch(`https://api.flowhub.co/v1/customers/?page_size=500&page=${page}`, { headers: hdrs });
       const d = await r.json();
       const customers = d.data || (Array.isArray(d) ? d : []);
       if (!customers.length) break;
       all = all.concat(customers);
-      if (customers.length < 1000) break;
+      if (customers.length < 500) break;
       page++;
       await new Promise(r => setTimeout(r, 200));
     }
@@ -1533,12 +1724,14 @@ async function fetchAllCustomersForTenant(tenantId) {
   try { return await ts.custInFlight; } finally { ts.custInFlight = null; }
 }
 
-// ── Admin endpoints — tenant management (authenticated, owner-only for now) ───
+// ── Admin endpoints — tenant management (owner-only, scoped by network_id) ───
 app.get('/api/admin/tenants', requireOwner, (req, res) => {
   try {
-    const tenants = db.prepare('SELECT tenant_id, name, location_id, timezone, active, logo_url, created_at FROM tenants ORDER BY created_at ASC').all();
+    const nid = req.networkId;
+    const tenants = db.prepare('SELECT tenant_id, name, location_id, timezone, active, logo_url, created_at FROM tenants WHERE network_id = ? ORDER BY created_at ASC').all(nid);
     const userTenantMap = {};
-    db.prepare('SELECT username, tenant_id, role FROM user_tenants').all()
+    db.prepare(`SELECT ut.username, ut.tenant_id, ut.role FROM user_tenants ut
+      JOIN tenants t ON t.tenant_id = ut.tenant_id WHERE t.network_id = ?`).all(nid)
       .forEach(r => { if (!userTenantMap[r.tenant_id]) userTenantMap[r.tenant_id] = []; userTenantMap[r.tenant_id].push({username: r.username, role: r.role}); });
     res.json({ tenants: tenants.map(t => ({ ...t, users: userTenantMap[t.tenant_id] || [] })) });
   } catch(e) { res.status(500).json({ error: e.message }); }
@@ -1546,25 +1739,28 @@ app.get('/api/admin/tenants', requireOwner, (req, res) => {
 
 app.post('/api/admin/tenant', requireOwner, express.json(), (req, res) => {
   try {
+    const nid = req.networkId;
     const { tenant_id, name, api_key, client_id, location_id, timezone } = req.body || {};
     if (!tenant_id || !name || !api_key || !client_id || !location_id)
       return res.status(400).json({ error: 'Required: tenant_id, name, api_key, client_id, location_id' });
     if (!/^[a-z0-9_-]+$/.test(tenant_id))
       return res.status(400).json({ error: 'tenant_id must be lowercase alphanumeric + hyphens/underscores only' });
-    db.prepare('INSERT OR REPLACE INTO tenants (tenant_id, name, api_key, client_id, location_id, timezone) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(tenant_id, name, api_key, client_id, location_id, timezone || 'America/New_York');
-    getTenantState(tenant_id); // initialize the store DB immediately
-    console.log('[tenant] added:', tenant_id, name);
+    db.prepare('INSERT OR REPLACE INTO tenants (tenant_id, name, api_key, client_id, location_id, timezone, network_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(tenant_id, name, api_key, client_id, location_id, timezone || 'America/New_York', nid);
+    getTenantState(tenant_id);
+    console.log('[tenant] added:', tenant_id, name, '(network:', nid, ')');
     res.json({ ok: true, tenant_id });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post('/api/admin/user-tenant', requireOwner, express.json(), (req, res) => {
   try {
+    const nid = req.networkId;
     const { username, tenant_id, role } = req.body || {};
     if (!username || !tenant_id) return res.status(400).json({ error: 'Required: username, tenant_id' });
-    const tenant = db.prepare('SELECT tenant_id FROM tenants WHERE tenant_id = ?').get(tenant_id);
-    if (!tenant) return res.status(404).json({ error: 'Tenant not found: ' + tenant_id });
+    // Only allow assigning to tenants within the admin's network
+    const tenant = db.prepare('SELECT tenant_id FROM tenants WHERE tenant_id = ? AND network_id = ?').get(tenant_id, nid);
+    if (!tenant) return res.status(404).json({ error: 'Store not found in your network: ' + tenant_id });
     db.prepare('INSERT OR REPLACE INTO user_tenants (username, tenant_id, role) VALUES (?, ?, ?)')
       .run(username, tenant_id, role || 'store_manager');
     res.json({ ok: true });
@@ -1577,13 +1773,26 @@ app.get('/api/tenants', (req, res) => {
     res.json({ tenants: req.userTenants || [], activeTenant: req.tenantId, role: req.userRole || 'store_manager' });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
+app.post('/api/switch-tenant', express.json(), (req, res) => {
+  try {
+    const { tenant_id } = req.body || {};
+    if (!tenant_id) return res.status(400).json({ error: 'tenant_id required' });
+    const allowed = (req.userTenants || []).some(t => t.tenant_id === tenant_id);
+    if (!allowed) return res.status(403).json({ error: 'Not authorized for tenant: ' + tenant_id });
+    _activeTenant.set(req.dashUser, tenant_id);
+    console.log(`[tenant] ${req.dashUser} switched to ${tenant_id}`);
+    res.json({ ok: true, activeTenant: tenant_id });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
 
-// ── User management (owner only) ──────────────────────────────────────────────
+// ── User management (owner only, scoped by network_id) ───────────────────────
 app.get('/api/admin/users', requireOwner, (req, res) => {
   try {
-    const users = db.prepare('SELECT username, global_role, created_at FROM users ORDER BY created_at ASC').all();
+    const nid = req.networkId;
+    const users = db.prepare('SELECT username, global_role, created_at FROM users WHERE network_id = ? ORDER BY created_at ASC').all(nid);
     const tenantMap = {};
-    db.prepare('SELECT username, tenant_id, role FROM user_tenants').all()
+    db.prepare(`SELECT ut.username, ut.tenant_id, ut.role FROM user_tenants ut
+      JOIN tenants t ON t.tenant_id = ut.tenant_id WHERE t.network_id = ?`).all(nid)
       .forEach(r => { if (!tenantMap[r.username]) tenantMap[r.username] = []; tenantMap[r.username].push({ tenant_id: r.tenant_id, role: r.role }); });
     res.json({ users: users.map(u => ({ ...u, tenants: tenantMap[u.username] || [] })) });
   } catch(e) { res.status(500).json({ error: e.message }); }
@@ -1591,6 +1800,7 @@ app.get('/api/admin/users', requireOwner, (req, res) => {
 
 app.post('/api/admin/user', requireOwner, express.json(), async (req, res) => {
   try {
+    const nid = req.networkId;
     const { username, password, global_role } = req.body || {};
     if (!username || !password) return res.status(400).json({ error: 'Required: username, password' });
     const validRoles = ['owner', 'multi_store', 'store_manager'];
@@ -1600,20 +1810,23 @@ app.post('/api/admin/user', requireOwner, express.json(), async (req, res) => {
     const users = loadUsers();
     users[username] = hash;
     fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
-    // Write to users table
-    db.prepare('INSERT OR REPLACE INTO users (username, global_role) VALUES (?, ?)').run(username, role);
-    console.log('[admin] user created:', username, role);
+    // Write to users table with network_id — new user belongs to the creating admin's network
+    db.prepare('INSERT OR REPLACE INTO users (username, global_role, network_id) VALUES (?, ?, ?)').run(username, role, nid);
+    console.log('[admin] user created:', username, role, '(network:', nid, ')');
     res.json({ ok: true, username, global_role: role });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 app.patch('/api/admin/user/:username', requireOwner, express.json(), (req, res) => {
   try {
+    const nid = req.networkId;
     const { username } = req.params;
     const { global_role } = req.body || {};
     const validRoles = ['owner', 'multi_store', 'store_manager'];
     if (!validRoles.includes(global_role)) return res.status(400).json({ error: 'Role must be: owner, multi_store, or store_manager' });
-    if (!db.prepare('SELECT 1 FROM users WHERE username = ?').get(username)) return res.status(404).json({ error: 'User not found' });
+    // Can only modify users in your network
+    if (!db.prepare('SELECT 1 FROM users WHERE username = ? AND network_id = ?').get(username, nid))
+      return res.status(404).json({ error: 'User not found' });
     db.prepare('UPDATE users SET global_role = ? WHERE username = ?').run(global_role, username);
     res.json({ ok: true, username, global_role });
   } catch(e) { res.status(500).json({ error: e.message }); }
@@ -1621,8 +1834,12 @@ app.patch('/api/admin/user/:username', requireOwner, express.json(), (req, res) 
 
 app.delete('/api/admin/user/:username', requireOwner, (req, res) => {
   try {
+    const nid = req.networkId;
     const { username } = req.params;
     if (username === req.dashUser) return res.status(400).json({ error: 'Cannot delete your own account' });
+    // Can only delete users in your network
+    if (!db.prepare('SELECT 1 FROM users WHERE username = ? AND network_id = ?').get(username, nid))
+      return res.status(404).json({ error: 'User not found' });
     // Remove from users.json
     const users = loadUsers();
     delete users[username];
@@ -1631,7 +1848,7 @@ app.delete('/api/admin/user/:username', requireOwner, (req, res) => {
     db.prepare('DELETE FROM users WHERE username = ?').run(username);
     db.prepare('DELETE FROM user_tenants WHERE username = ?').run(username);
     db.prepare('DELETE FROM sessions WHERE user = ?').run(username);
-    console.log('[admin] user deleted:', username);
+    console.log('[admin] user deleted:', username, '(network:', nid, ')');
     res.json({ ok: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -1675,8 +1892,8 @@ app.post('/api/admin/tenant/:tenantId/logo', requireOwner, express.json({ limit:
     const { tenantId } = req.params;
     const { imageData } = req.body || {};
     if (!imageData) return res.status(400).json({ error: 'imageData required (base64 data URL)' });
-    if (!db.prepare('SELECT 1 FROM tenants WHERE tenant_id = ?').get(tenantId))
-      return res.status(404).json({ error: 'Tenant not found' });
+    if (!db.prepare('SELECT 1 FROM tenants WHERE tenant_id = ? AND network_id = ?').get(tenantId, req.networkId))
+      return res.status(404).json({ error: 'Store not found in your network' });
 
     // Parse data URL: data:image/png;base64,....
     const match = imageData.match(/^data:(image\/(png|jpe?g|gif|webp|svg\+xml));base64,(.+)$/);
@@ -1704,6 +1921,8 @@ app.post('/api/admin/tenant/:tenantId/logo', requireOwner, express.json({ limit:
 app.delete('/api/admin/tenant/:tenantId/logo', requireOwner, (req, res) => {
   try {
     const { tenantId } = req.params;
+    if (!db.prepare('SELECT 1 FROM tenants WHERE tenant_id = ? AND network_id = ?').get(tenantId, req.networkId))
+      return res.status(404).json({ error: 'Store not found in your network' });
     const row = db.prepare('SELECT logo_url FROM tenants WHERE tenant_id = ?').get(tenantId);
     if (row && row.logo_url) {
       const p = __dirname + row.logo_url;
@@ -1723,36 +1942,41 @@ app.get("/api/orders", async(q,s) => {
 
 // ── Sales stats — server-computed analytics, replaces raw orders download ─────
 app.get("/api/sales-stats", async(q,s) => {
-  // Return cached result immediately if fresh (skip recompute between 3-min cycles)
-  if (!isDemo() && _salesStatsCache && Date.now() - _salesStatsCacheTime < STATS_RESULT_TTL) {
+  const tid = currentTenantId();
+  const tz  = currentTimezone();
+  // Per-tenant stats caching
+  const ts = tid !== '617thc' ? getTenantState(tid) : null;
+  const _sc  = ts ? ts.statsCache     : _salesStatsCache;
+  const _sct = ts ? ts.statsCacheTime : _salesStatsCacheTime;
+  const _sif = ts ? ts.statsInFlight  : _salesStatsInFlight;
+  if (!isDemo() && _sc && Date.now() - _sct < STATS_RESULT_TTL) {
     s.setHeader('Cache-Control','private,no-store');
-    return s.json(_salesStatsCache);
+    return s.json(_sc);
   }
-  // Deduplicate: if another request is already computing, wait for it
-  if (!isDemo() && _salesStatsInFlight) {
-    try { return s.json(await _salesStatsInFlight); } catch(e) { /* fall through to fresh compute */ }
+  if (!isDemo() && _sif) {
+    try { return s.json(await _sif); } catch(e) { /* fall through to fresh compute */ }
   }
   const _compute = (async () => {
   try {
     const now = new Date();
-    const nowEST = now.toLocaleString('sv', {timeZone:'America/New_York'});
-    const todayStr = nowEST.slice(0,10);
-    const yesterdayStr = new Date(now.getTime()-MS_PER_DAY).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
+    const nowLocal = now.toLocaleString('sv', {timeZone: tz});
+    const todayStr = nowLocal.slice(0,10);
+    const yesterdayStr = new Date(now.getTime()-MS_PER_DAY).toLocaleDateString('en-CA',{timeZone: tz});
 
     // Date range helpers
     const dow = now.getDay();
     const mondayOffset = dow === 0 ? 6 : dow - 1; // Mon=0 offset, Sun=6 offset — week starts Monday
-    const weekStartStr = new Date(now.getTime() - mondayOffset*MS_PER_DAY).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
+    const weekStartStr = new Date(now.getTime() - mondayOffset*MS_PER_DAY).toLocaleDateString('en-CA',{timeZone: tz});
     const monthStartStr = todayStr.slice(0,8)+'01';
-    const lastWeekEndStr = new Date(new Date(weekStartStr+'T12:00:00Z').getTime()-MS_PER_DAY).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
-    const lastWeekStartStr = new Date(new Date(weekStartStr+'T12:00:00Z').getTime()-7*MS_PER_DAY).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
-    const lastMonthEndStr = new Date(new Date(monthStartStr+'T12:00:00Z').getTime()-MS_PER_DAY).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
+    const lastWeekEndStr = new Date(new Date(weekStartStr+'T12:00:00Z').getTime()-MS_PER_DAY).toLocaleDateString('en-CA',{timeZone: tz});
+    const lastWeekStartStr = new Date(new Date(weekStartStr+'T12:00:00Z').getTime()-7*MS_PER_DAY).toLocaleDateString('en-CA',{timeZone: tz});
+    const lastMonthEndStr = new Date(new Date(monthStartStr+'T12:00:00Z').getTime()-MS_PER_DAY).toLocaleDateString('en-CA',{timeZone: tz});
     const lastMonthStartStr = lastMonthEndStr.slice(0,8)+'01';
-    const weekBeforeLastEndStr = new Date(new Date(lastWeekStartStr+'T12:00:00Z').getTime()-MS_PER_DAY).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
-    const weekBeforeLastStartStr = new Date(new Date(lastWeekStartStr+'T12:00:00Z').getTime()-7*MS_PER_DAY).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
-    const monthBeforeLastEndStr = new Date(new Date(lastMonthStartStr+'T12:00:00Z').getTime()-MS_PER_DAY).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
+    const weekBeforeLastEndStr = new Date(new Date(lastWeekStartStr+'T12:00:00Z').getTime()-MS_PER_DAY).toLocaleDateString('en-CA',{timeZone: tz});
+    const weekBeforeLastStartStr = new Date(new Date(lastWeekStartStr+'T12:00:00Z').getTime()-7*MS_PER_DAY).toLocaleDateString('en-CA',{timeZone: tz});
+    const monthBeforeLastEndStr = new Date(new Date(lastMonthStartStr+'T12:00:00Z').getTime()-MS_PER_DAY).toLocaleDateString('en-CA',{timeZone: tz});
     const monthBeforeLastStartStr = monthBeforeLastEndStr.slice(0,8)+'01';
-    const fourWeeksBackStr = new Date(now.getTime()-29*MS_PER_DAY).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
+    const fourWeeksBackStr = new Date(now.getTime()-29*MS_PER_DAY).toLocaleDateString('en-CA',{timeZone: tz});
     const mo = [weekStartStr,monthStartStr,lastMonthStartStr,monthBeforeLastStartStr,weekBeforeLastStartStr,fourWeeksBackStr].sort()[0];
 
     const [orders, customers] = await Promise.all([
@@ -1761,16 +1985,16 @@ app.get("/api/sales-stats", async(q,s) => {
     ]);
     const sold = orders.filter(o => o.orderStatus==='sold' && !o.voided && o.completedOn);
 
-    const weekStartBound        = estDayStart(weekStartStr);
-    const monthStartBound       = estDayStart(monthStartStr);
-    const lastWeekStartBound    = estDayStart(lastWeekStartStr);
-    const lastWeekEndBound      = estDayEnd(lastWeekEndStr);
-    const lastMonthStartBound   = estDayStart(lastMonthStartStr);
-    const lastMonthEndBound     = estDayEnd(lastMonthEndStr);
-    const wblStartBound         = estDayStart(weekBeforeLastStartStr);
-    const wblEndBound           = estDayEnd(weekBeforeLastEndStr);
-    const mblStartBound         = estDayStart(monthBeforeLastStartStr);
-    const mblEndBound           = estDayEnd(monthBeforeLastEndStr);
+    const weekStartBound        = tzDayStart(weekStartStr, tz);
+    const monthStartBound       = tzDayStart(monthStartStr, tz);
+    const lastWeekStartBound    = tzDayStart(lastWeekStartStr, tz);
+    const lastWeekEndBound      = tzDayEnd(lastWeekEndStr, tz);
+    const lastMonthStartBound   = tzDayStart(lastMonthStartStr, tz);
+    const lastMonthEndBound     = tzDayEnd(lastMonthEndStr, tz);
+    const wblStartBound         = tzDayStart(weekBeforeLastStartStr, tz);
+    const wblEndBound           = tzDayEnd(weekBeforeLastEndStr, tz);
+    const mblStartBound         = tzDayStart(monthBeforeLastStartStr, tz);
+    const mblEndBound           = tzDayEnd(monthBeforeLastEndStr, tz);
     const t7bound  = new Date(now.getTime()-7*MS_PER_DAY);
     const t30bound = new Date(now.getTime()-30*MS_PER_DAY);
 
@@ -1802,8 +2026,8 @@ app.get("/api/sales-stats", async(q,s) => {
     }
 
     // Baselines
-    function msMidnight(d) { const p=new Date(d).toLocaleString('en-US',{timeZone:'America/New_York',hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'}).split(':').map(Number); return((p[0]*3600)+(p[1]*60)+p[2])*1000; }
-    function estDate(d) { return new Date(d).toLocaleDateString('en-CA',{timeZone:'America/New_York'}); }
+    function msMidnight(d) { const p=new Date(d).toLocaleString('en-US',{timeZone:tz,hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'}).split(':').map(Number); return((p[0]*3600)+(p[1]*60)+p[2])*1000; }
+    function estDate(d) { return new Date(d).toLocaleDateString('en-CA',{timeZone:tz}); }
     const nowMs = msMidnight(now);
     const todayDom = parseInt(todayStr.slice(8,10));
 
@@ -1833,8 +2057,8 @@ app.get("/api/sales-stats", async(q,s) => {
       const n=newCount,r=retIds.size,tot=n+r;
       return{newC:n,ret:r,pctNew:tot?Math.round(n/tot*100):0,pctRet:tot?Math.round(r/tot*100):0};
     }
-    const todayStart=estDayStart(todayStr);
-    const newToday=customers.filter(c=>c.createdAt&&new Date(c.createdAt).toLocaleDateString('en-CA',{timeZone:'America/New_York'})===todayStr).length;
+    const todayStart=tzDayStart(todayStr, tz);
+    const newToday=customers.filter(c=>c.createdAt&&new Date(c.createdAt).toLocaleDateString('en-CA',{timeZone:tz})===todayStr).length;
     const newLast7=customers.filter(c=>new Date(c.createdAt||0)>=t7bound).length;
     const newLast30=customers.filter(c=>new Date(c.createdAt||0)>=t30bound).length;
     const newVsReturning={
@@ -1863,16 +2087,20 @@ app.get("/api/sales-stats", async(q,s) => {
     return result;
   } catch(e) { throw e; }
   })();
-  if (!isDemo()) _salesStatsInFlight = _compute;
+  if (!isDemo()) { if (ts) ts.statsInFlight = _compute; else _salesStatsInFlight = _compute; }
   try {
     const result = await _compute;
-    if (!isDemo()) { _salesStatsCache = result; _salesStatsCacheTime = Date.now(); }
+    if (!isDemo()) {
+      if (ts) { ts.statsCache = result; ts.statsCacheTime = Date.now(); }
+      else    { _salesStatsCache = result; _salesStatsCacheTime = Date.now(); }
+    }
     s.setHeader('Cache-Control','private,no-store');
     s.json(result);
   } catch(e) {
     s.status(500).json({error: e.message});
   } finally {
-    if (_salesStatsInFlight === _compute) _salesStatsInFlight = null;
+    if (ts) { if (ts.statsInFlight === _compute) ts.statsInFlight = null; }
+    else    { if (_salesStatsInFlight === _compute) _salesStatsInFlight = null; }
   }
 });
 
@@ -1887,32 +2115,33 @@ app.get("/api/customers", async(q,s) => {
 app.get("/api/customer-stats", async(q,s) => {
   try {
     const now = new Date();
+    const tz = currentTimezone();
     const customers = await fetchAllCustomersNonBlocking();
     const t7   = new Date(now.getTime() -  7 * MS_PER_DAY);
     const t30  = new Date(now.getTime() - 30 * MS_PER_DAY);
     const t60  = new Date(now.getTime() - 60 * MS_PER_DAY);
-    const todayEST = now.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-    const weekStart = new Date(now.getTime() - now.getDay() * MS_PER_DAY).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    const todayEST = now.toLocaleDateString('en-CA', { timeZone: tz });
+    const weekStart = new Date(now.getTime() - now.getDay() * MS_PER_DAY).toLocaleDateString('en-CA', { timeZone: tz });
     const weekStartBound = new Date(weekStart + 'T00:00:00');
     const monthStart = todayEST.slice(0, 8) + '01';
     const monthStartBound = new Date(monthStart + 'T00:00:00');
 
     const loyal = customers.filter(c => c.isLoyal || (c.loyaltyPoints || 0) > 0);
     const loyalDates = loyal.map(c => c.createdAt
-      ? new Date(c.createdAt).toLocaleDateString('en-CA', { timeZone: 'America/New_York' })
+      ? new Date(c.createdAt).toLocaleDateString('en-CA', { timeZone: tz })
       : '2000-01-01').sort();
     function lgBisect(arr, val) { let lo=0,hi=arr.length; while(lo<hi){const m=lo+hi>>1; if(arr[m]<=val)lo=m+1; else hi=m;} return lo; }
     const loyaltyGrowth = [];
     for (let di = 29; di >= 0; di--) {
       const d = new Date(now.getTime() - di * MS_PER_DAY);
-      const ds = d.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+      const ds = d.toLocaleDateString('en-CA', { timeZone: tz });
       loyaltyGrowth.push({ date: ds, count: lgBisect(loyalDates, ds) });
     }
 
     s.setHeader('Cache-Control','private,max-age=300');
     s.json({
       total: customers.length,
-      newToday:   customers.filter(c => c.createdAt && new Date(c.createdAt).toLocaleDateString('en-CA',{timeZone:'America/New_York'}) === todayEST).length,
+      newToday:   customers.filter(c => c.createdAt && new Date(c.createdAt).toLocaleDateString('en-CA',{timeZone: tz}) === todayEST).length,
       newWeek:    customers.filter(c => new Date(c.createdAt||0) >= weekStartBound).length,
       newMonth:   customers.filter(c => new Date(c.createdAt||0) >= monthStartBound).length,
       newLast7:   customers.filter(c => new Date(c.createdAt||0) >= t7).length,
@@ -2095,6 +2324,23 @@ function _nyOffsetHours(dateStr) {
   const nyHour = parseInt(probe.toLocaleString('en-US', { timeZone: 'America/New_York', hour: '2-digit', hour12: false }));
   return 12 - nyHour; // EDT → 4, EST → 5
 }
+// Generalized timezone offset — used by tenant order caching for non-ET tenants
+function _tzOffsetHours(dateStr, tz) {
+  const probe = new Date((dateStr.length === 10 ? dateStr : dateStr.slice(0, 10)) + 'T12:00:00Z');
+  const localHour = parseInt(probe.toLocaleString('en-US', { timeZone: tz, hour: '2-digit', hour12: false }));
+  return 12 - localHour;
+}
+function tzDayStart(dateStr, tz) {
+  const ds = dateStr.length === 10 ? dateStr : dateStr.slice(0, 10);
+  const off = _tzOffsetHours(ds, tz);
+  return new Date(ds + 'T' + String(off).padStart(2, '0') + ':00:00.000Z');
+}
+function tzDayEnd(dateStr, tz) {
+  const ds = dateStr.length === 10 ? dateStr : dateStr.slice(0, 10);
+  const nextDs = new Date(new Date(ds + 'T12:00:00Z').getTime() + MS_PER_DAY).toISOString().slice(0, 10);
+  const off = _tzOffsetHours(nextDs, tz);
+  return new Date(new Date(nextDs + 'T' + String(off).padStart(2, '0') + ':00:00.000Z').getTime() - 1);
+}
 function estDayStart(dateStr) {
   const ds = dateStr.length === 10 ? dateStr : dateStr.slice(0, 10);
   const off = _nyOffsetHours(ds);
@@ -2110,7 +2356,8 @@ function estDayEnd(dateStr) {
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 
 function estInfo(dateStr) {
-  const full = new Date(dateStr).toLocaleString('sv', {timeZone: 'America/New_York'}); // "YYYY-MM-DD HH:MM:SS"
+  const tz = currentTimezone();
+  const full = new Date(dateStr).toLocaleString('sv', {timeZone: tz}); // "YYYY-MM-DD HH:MM:SS"
   const [date, time] = full.split(' ');
   return {date, hour: parseInt(time.split(':')[0]), dow: new Date(date + 'T12:00:00Z').getDay()};
 }
@@ -3982,12 +4229,43 @@ async function warmCaches() {
     });
   });
   await warmCaches();
+
+  // ── Warm MNG tenant caches in background (phase 3) ──────────────────────────
+  const mngTenants = db.prepare("SELECT tenant_id, timezone FROM tenants WHERE tenant_id != '617thc' AND active = 1").all();
+  if (mngTenants.length) {
+    console.log(`[warmup] Phase 3: warming ${mngTenants.length} additional tenant(s)...`);
+    for (const t of mngTenants) {
+      const tz = t.timezone || 'America/Los_Angeles';
+      const today = new Date().toLocaleDateString('en-CA', {timeZone: tz});
+      const mo = today.slice(0, 8) + '01';
+      reqCtx.run({tenantId: t.tenant_id}, () => {
+        fetchInventory().catch(e => console.error(`[warmup:${t.tenant_id}] inv error:`, e.message));
+        fetchAllOrdersCached(mo, today).catch(e => console.error(`[warmup:${t.tenant_id}] orders error:`, e.message));
+        fetchAllCustomers().catch(e => console.error(`[warmup:${t.tenant_id}] cust error:`, e.message));
+      });
+    }
+  }
+
   // Proactive background poll — keeps today's orders current even when nobody is on the dashboard
   setInterval(() => {
     const today = _estToday();
     fetchAllOrdersCached(today, today).catch(e => console.error('[poll] today refresh error:', e.message));
+    // Poll non-617thc tenants too
+    for (const t of mngTenants) {
+      const tz = t.timezone || 'America/Los_Angeles';
+      const tToday = new Date().toLocaleDateString('en-CA', {timeZone: tz});
+      reqCtx.run({tenantId: t.tenant_id}, () => {
+        fetchAllOrdersCached(tToday, tToday).catch(e => console.error(`[poll:${t.tenant_id}] error:`, e.message));
+      });
+    }
   }, TODAY_TTL);
   // Background stats cache invalidation — bust the cache every 3 min so the next request recomputes
   // (actual recompute happens lazily on next request, keeping the server loop non-blocking)
-  setInterval(() => { _salesStatsCache = null; }, STATS_RESULT_TTL);
+  setInterval(() => {
+    _salesStatsCache = null;
+    for (const t of mngTenants) {
+      const ts = getTenantState(t.tenant_id);
+      if (ts) ts.statsCache = null;
+    }
+  }, STATS_RESULT_TTL);
 })();

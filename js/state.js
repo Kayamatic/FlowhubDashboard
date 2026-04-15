@@ -333,6 +333,26 @@ export async function init() {
     var adminBtn = document.getElementById('adminBtn');
     if (adminBtn) adminBtn.style.display = (state.userRole === 'owner' && !state.isDemo) ? 'inline-block' : 'none';
 
+    // ── Store switcher (multi-tenant users) ────────────────────────────────────
+    (function initStoreSwitcher(info) {
+      var sel = document.getElementById('storeSwitcher');
+      if (!sel || !info.tenants || info.tenants.length <= 1) return;
+      sel.style.display = 'inline-block';
+      sel.innerHTML = '';
+      info.tenants.forEach(function(t) {
+        var opt = document.createElement('option');
+        opt.value = t.tenant_id;
+        opt.textContent = t.name || t.tenant_id;
+        if (t.tenant_id === info.tenantId) opt.selected = true;
+        sel.appendChild(opt);
+      });
+      sel.onchange = function() {
+        fetch('/api/switch-tenant', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({tenant_id: sel.value})})
+          .then(function(r){ return r.json(); })
+          .then(function(d){ if(d.ok) window.location.reload(); });
+      };
+    })(sessInfo);
+
     // ── Per-tenant store logo ─────────────────────────────────────────────────
     // When a tenant has uploaded a custom logo, swap out the default SVG for it
     // in both desktop header and mobile logo bar.
