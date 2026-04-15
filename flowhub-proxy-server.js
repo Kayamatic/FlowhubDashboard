@@ -1766,7 +1766,7 @@ function getStoreCustomerIds(tenantId) {
   if (tenantId === '617thc') return null; // 617thc is single-store, no filtering needed
   const ts = getTenantState(tenantId);
   if (!ts) return null;
-  const rows = ts.db.prepare('SELECT DISTINCT json_extract(data, "$.customerId") AS cid FROM orders WHERE json_extract(data, "$.customerId") IS NOT NULL').all();
+  const rows = ts.db.prepare("SELECT DISTINCT json_extract(data, '$.customerId') AS cid FROM orders WHERE json_extract(data, '$.customerId') IS NOT NULL").all();
   return new Set(rows.map(r => r.cid));
 }
 
