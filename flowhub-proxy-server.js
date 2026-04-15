@@ -2734,6 +2734,15 @@ async function _storeCustomersByProduct(tenantId, start, end, keyword) {
   });
 }
 
+async function _storeMargin(tenantId, start, end, filterBy, filterValue) {
+  return new Promise((resolve) => {
+    reqCtx.run({ tenantId }, async () => {
+      try { resolve(await computeMarginAnalysis(start, end, filterBy, filterValue)); }
+      catch(e) { resolve({ error: e.message }); }
+    });
+  });
+}
+
 // Validate that all requested store IDs belong to the current user's network
 function _validateStores(storeIds, networkId) {
   const valid = db.prepare(
@@ -2742,7 +2751,7 @@ function _validateStores(storeIds, networkId) {
   return valid;
 }
 
-async function computeCompareStores(storeIds, metric, start, end, limit, keyword) {
+async function computeCompareStores(storeIds, metric, start, end, limit, keyword, filterBy) {
   const networkId = getNetworkId(currentTenantId());
   const validIds = _validateStores(storeIds, networkId);
   if (!validIds.length) return { error: 'No valid stores found in your network for: ' + storeIds.join(', ') };
@@ -2764,8 +2773,11 @@ async function computeCompareStores(storeIds, metric, start, end, limit, keyword
     if (!keyword) return { error: 'customers_by_product requires a keyword parameter' };
     const counts = await Promise.all(validIds.map(id => _storeCustomersByProduct(id, start, end, keyword)));
     validIds.forEach((id, i) => { results[id] = { store: nameMap[id] || id, keyword, ...counts[i] }; });
+  } else if (metric === 'margin') {
+    const margins = await Promise.all(validIds.map(id => _storeMargin(id, start, end, filterBy, keyword)));
+    validIds.forEach((id, i) => { results[id] = { store: nameMap[id] || id, ...margins[i] }; });
   } else {
-    return { error: `Unknown metric "${metric}". Use: revenue, top_customers, top_products, customers_by_product` };
+    return { error: `Unknown metric "${metric}". Use: revenue, top_customers, top_products, customers_by_product, margin` };
   }
 
   return { startDate: start, endDate: end, metric: metric || 'revenue', stores: results };
@@ -4246,8 +4258,9 @@ const TOOLS = [
       type: 'object',
       properties: {
         store_ids:  { type: 'array', items: { type: 'string' }, description: 'Array of tenant_ids to compare. E.g. ["mng-newport", "mng-santa-ana"]. Use tenant IDs from the store roster.' },
-        metric:     { type: 'string', enum: ['revenue', 'top_customers', 'top_products', 'customers_by_product'], description: 'What to compare: "revenue" (default) for sales summary, "top_customers" for top spenders at each store, "top_products" for top sellers at each store, "customers_by_product" for unique customer count who bought a specific product/category at each store (requires keyword).' },
-        keyword:    { type: 'string', description: 'For customers_by_product: product name, brand, or category to match. E.g. "preroll", "edible", "Stiiizy", "flower". Preroll synonyms (joint, pre-roll, prj) are normalized automatically.' },
+        metric:     { type: 'string', enum: ['revenue', 'top_customers', 'top_products', 'customers_by_product', 'margin'], description: 'What to compare: "revenue" (default) for sales summary, "top_customers" for top spenders, "top_products" for top sellers, "customers_by_product" for unique buyers of a product/category (requires keyword), "margin" for gross margin analysis by brand/category/product (optionally filtered by keyword + filter_by).' },
+        keyword:    { type: 'string', description: 'For customers_by_product: product/brand/category keyword. For margin: optional filter value (e.g. "flower", "sativa", "Stiiizy"). Preroll synonyms auto-normalized.' },
+        filter_by:  { type: 'string', enum: ['product', 'brand', 'category'], description: 'For margin metric: how to interpret the keyword — filter by "product" name, "brand", or "category". Omit for full unfiltered margin.' },
         start_date: { type: 'string', description: 'Start date YYYY-MM-DD' },
         end_date:   { type: 'string', description: 'End date YYYY-MM-DD' },
         limit:      { type: 'number', description: 'For top_customers or top_products: how many to return per store (default 20 for customers, 10 for products)' }
@@ -4353,7 +4366,7 @@ async function executeTool(name, input) {
     if (name === 'generate_csv')              return await generateCsvReport(input.report_type, input.start_date, input.end_date);
     if (name === 'get_top_customer_categories') return await computeTopCustomerCategories(input.days, input.limit, input.start_date, input.end_date);
     if (name === 'build_customer_segment')  return await buildCustomerSegment(input);
-    if (name === 'compare_stores')      return await computeCompareStores(input.store_ids, input.metric, input.start_date, input.end_date, input.limit, input.keyword);
+    if (name === 'compare_stores')      return await computeCompareStores(input.store_ids, input.metric, input.start_date, input.end_date, input.limit, input.keyword, input.filter_by);
     if (name === 'rank_stores')         return await computeRankStores(input.metric, input.start_date, input.end_date);
     if (name === 'get_network_summary') return await computeNetworkSummary(input.start_date, input.end_date);
     return {error: 'Unknown tool: ' + name};
@@ -4381,6 +4394,7 @@ TOOL SELECTION RULES:
 - When a user asks about margin, profit, gross profit, or COGS for a product type broken down by day, ALWAYS use get_daily_sku_margin. Never use get_margin_analysis for per-day breakdowns — it only returns aggregate totals.
 - The keyword parameter in get_weekly_sku_sales, get_daily_sku_sales, and get_daily_sku_margin searches across product name, brand, AND category. So keyword "Joint" matches all products in the Joint category, and keyword "Stiiizy" matches all Stiiizy brand products. These tools are the best choice for category or brand breakdowns over time.
 - When comparing how many customers bought a product, brand, category, or SKU across two or more stores (e.g. "how many customers bought prerolls in Newport vs Santa Ana"), ALWAYS use compare_stores with metric="customers_by_product" and the appropriate keyword. Never use get_daily_sku_sales or get_transactions_by_product for cross-store customer counts.
+- When comparing margin, gross profit, or profitability across two or more stores (e.g. "compare sativa vs indica margin at Newport vs Santa Ana"), use compare_stores with metric="margin". Use filter_by + keyword to narrow to a category or brand (e.g. filter_by="category", keyword="flower").
 - When the user asks for a table, spreadsheet, CSV, export, or download of data (e.g. "give me hourly transactions", "export daily revenue", "download a breakdown"), ALWAYS use generate_csv. Choose the most appropriate report_type: hourly_by_day for hour-by-day grids, hourly_by_weekday for weekday patterns, daily_summary for per-day totals, weekly_summary for per-week totals, top_products for product rankings, hourly_heatmap for aggregate hour-of-day averages. After calling generate_csv, confirm what was generated and tell the user the download button will appear below.
 
 LOYALTY DATA (Alpine IQ Integration):
