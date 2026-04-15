@@ -119,6 +119,7 @@ db.exec(`
 
 // Add logo_url column if it doesn't exist yet (safe migration)
 try { db.exec("ALTER TABLE tenants ADD COLUMN logo_url TEXT"); } catch(_) {}
+try { db.exec("ALTER TABLE tenants ADD COLUMN inception_date TEXT"); } catch(_) {}
 // Add network_id column if it doesn't exist yet (safe migration)
 try { db.exec("ALTER TABLE tenants ADD COLUMN network_id TEXT"); } catch(_) {}
 // Set default network_id = tenant_id for any rows that don't have one
@@ -145,6 +146,8 @@ const _seedTenant = db.prepare(`INSERT OR IGNORE INTO tenants (tenant_id, name, 
 _seedTenant.run('mng-newport',    'MNG Newport',           MNG_KEY, MNG_CID, '542c6f24-9d5b-4ba1-aacf-95adb8f327f4', 'America/Los_Angeles', 'mng');
 _seedTenant.run('mng-santa-ana',  'MNG Santa Ana',         MNG_KEY, MNG_CID, '8d050377-ec5e-4402-984c-637d3e66fa27', 'America/Los_Angeles', 'mng');
 _seedTenant.run('mng-costa-mesa', 'MNG Costa Mesa Harbor', MNG_KEY, MNG_CID, 'c866ea21-c2b5-4464-ac23-48a09a8c0462', 'America/Los_Angeles', 'mng');
+// MNG went live on Flowhub 2026-01-01 — set inception date for accurate history fetching
+db.exec("UPDATE tenants SET inception_date = '2026-01-01' WHERE network_id = 'mng' AND inception_date IS NULL");
 
 // Migrate existing users.json users into the users table as 'owner' in 617thc network (idempotent)
 try {
@@ -4578,12 +4581,12 @@ async function warmCaches() {
     for (const t of mngTenants) {
       const tz = t.timezone || 'America/Los_Angeles';
       const today = new Date().toLocaleDateString('en-CA', {timeZone: tz});
-      const oneYearBack = new Date(Date.now() - 365 * MS_PER_DAY).toLocaleDateString('en-CA', {timeZone: tz});
+      // Fetch from inception (2026-01-01 for MNG) so new-vs-returning is accurate
+      const inceptionDate = t.inception_date || '2026-01-01';
       reqCtx.run({tenantId: t.tenant_id}, () => {
         fetchInventory().catch(e => console.error(`[warmup:${t.tenant_id}] inv error:`, e.message));
-        // Fetch 1 year of history so new-vs-returning calculations are accurate
-        fetchAllOrdersCached(oneYearBack, today)
-          .then(() => console.log(`[warmup:${t.tenant_id}] 1yr order history ready`))
+        fetchAllOrdersCached(inceptionDate, today)
+          .then(() => console.log(`[warmup:${t.tenant_id}] full order history ready (since ${inceptionDate})`))
           .catch(e => console.error(`[warmup:${t.tenant_id}] orders error:`, e.message));
         fetchAllCustomers().catch(e => console.error(`[warmup:${t.tenant_id}] cust error:`, e.message));
       });
