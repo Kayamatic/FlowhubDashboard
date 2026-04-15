@@ -1619,6 +1619,7 @@ async function fetchAllOrdersForTenant(start, end, tenantId) {
 // Incremental SQLite-cached order fetcher for non-617thc tenants
 // Mirrors fetchAllOrdersCached() logic but uses per-tenant state + timezone
 async function fetchAllOrdersCachedForTenant(start, end, tenantId) {
+  console.log(`[ordcache:${tenantId}] fetchAllOrdersCachedForTenant(${start}, ${end}) called`);
   const ts = getTenantState(tenantId);
   const tz = currentTimezone();
   const today = new Date().toLocaleDateString('en-CA', {timeZone: tz});
@@ -1703,8 +1704,9 @@ async function fetchAllOrdersCachedForTenant(start, end, tenantId) {
 async function fetchAllCustomersForTenant(tenantId) {
   if (tenantId === '617thc') return fetchAllCustomers();
   const ts = getTenantState(tenantId);
-  if (ts.custCache && Date.now() - ts.custCacheTime < CUST_TTL) return ts.custCache;
-  if (ts.custInFlight) return ts.custInFlight;
+  if (ts.custCache && Date.now() - ts.custCacheTime < CUST_TTL) { console.log(`[cust:${tenantId}] returning cached ${ts.custCache.length}`); return ts.custCache; }
+  if (ts.custInFlight) { console.log(`[cust:${tenantId}] joining in-flight`); return ts.custInFlight; }
+  console.log(`[cust:${tenantId}] starting fresh fetch...`);
   ts.custInFlight = (async () => {
     const { hdrs, loc } = getTenantCredentials(tenantId);
     let all = [], page = 1;
