@@ -1979,10 +1979,12 @@ app.get("/api/sales-stats", async(q,s) => {
     const fourWeeksBackStr = new Date(now.getTime()-29*MS_PER_DAY).toLocaleDateString('en-CA',{timeZone: tz});
     const mo = [weekStartStr,monthStartStr,lastMonthStartStr,monthBeforeLastStartStr,weekBeforeLastStartStr,fourWeeksBackStr].sort()[0];
 
+    console.log(`[sales-stats:${tid}] fetching orders ${mo}→${todayStr} + customers...`);
     const [orders, customers] = await Promise.all([
       fetchAllOrdersCached(mo, todayStr),
       fetchAllCustomersNonBlocking()
     ]);
+    console.log(`[sales-stats:${tid}] got ${orders.length} orders, ${(customers||[]).length} customers`);
     const sold = orders.filter(o => o.orderStatus==='sold' && !o.voided && o.completedOn);
 
     const weekStartBound        = tzDayStart(weekStartStr, tz);
@@ -2084,8 +2086,9 @@ app.get("/api/sales-stats", async(q,s) => {
       blWeek:  +blWeek.toFixed(2),  blMonth:     +blMonth.toFixed(2),
       blLastWeek: +blLastWeek.toFixed(2), blLastMonth: +blLastMonth.toFixed(2)
     };
+    console.log(`[sales-stats:${tid}] compute done — ${sold.length} sold orders`);
     return result;
-  } catch(e) { throw e; }
+  } catch(e) { console.error(`[sales-stats:${tid}] ERROR:`, e.message); throw e; }
   })();
   if (!isDemo()) { if (ts) ts.statsInFlight = _compute; else _salesStatsInFlight = _compute; }
   try {
