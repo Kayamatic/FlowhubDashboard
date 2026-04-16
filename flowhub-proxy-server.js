@@ -4534,10 +4534,22 @@ app.post("/api/chat", express.json(), async(req, res) => {
               return {type: 'tool_result', tool_use_id: tu.id,
                 content: JSON.stringify({summary: result.summary, rowCount: result.rowCount, headers: result.headers, filename: result.csvFilename})};
             }
-            return {type: 'tool_result', tool_use_id: tu.id, content: JSON.stringify(result)};
+            // Cap tool result size — large cross-store results blow the context window
+            const raw = JSON.stringify(result);
+            const content = raw.length > 40000 ? raw.slice(0, 40000) + '... [truncated for length]' : raw;
+            return {type: 'tool_result', tool_use_id: tu.id, content};
           })
         );
         msgs = [...msgs, {role: 'user', content: results}];
+        // Trim conversation history to prevent context overflow on long sessions.
+        // Keep system prompt + last 10 turns (20 messages). Tool result pairs are
+        // always kept together (assistant tool_use + user tool_result).
+        if (msgs.length > 20) {
+          // Find first non-tool-result boundary to trim cleanly
+          msgs = msgs.slice(-20);
+          // Ensure first message is a user message (not a dangling tool_result)
+          while (msgs.length && msgs[0].role !== 'user') msgs = msgs.slice(1);
+        }
       } else {
         const t = (d.content || []).find(c => c.type === 'text');
         return send({content: [{type: 'text', text: t ? t.text : JSON.stringify(d)}], chart: chartData, csv: csvPayload});
