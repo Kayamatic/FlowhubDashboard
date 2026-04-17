@@ -1322,7 +1322,7 @@ async function fetchInventory() {
     byId[id].quantity += qty;
     const rn = (row.roomName || '').toLowerCase();
     if (rn === 'sales floor')              byId[id].floorQuantity += qty;
-    else if (rn === 'vault' || rn === 'moon room') byId[id].vaultQuantity += qty;
+    else if (rn === 'vault' || rn === 'moon room' || rn === 'backstock' || rn === 'back stock') byId[id].vaultQuantity += qty;
     else                                   byId[id].otherRoomQuantity += qty;
     byId[id].roomBreakdown[row.roomName || 'Unknown'] = (byId[id].roomBreakdown[row.roomName || 'Unknown'] || 0) + qty;
   }
@@ -1590,7 +1590,7 @@ async function fetchInventoryForTenant(tenantId) {
     byId[id].quantity += qty;
     const rn = (row.roomName || '').toLowerCase();
     if (rn === 'sales floor') byId[id].floorQuantity += qty;
-    else if (rn === 'vault' || rn === 'moon room') byId[id].vaultQuantity += qty;
+    else if (rn === 'vault' || rn === 'moon room' || rn === 'backstock' || rn === 'back stock') byId[id].vaultQuantity += qty;
     else byId[id].otherRoomQuantity += qty;
     byId[id].roomBreakdown[row.roomName || 'Unknown'] = (byId[id].roomBreakdown[row.roomName || 'Unknown'] || 0) + qty;
   }
