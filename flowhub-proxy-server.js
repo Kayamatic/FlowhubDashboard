@@ -4603,20 +4603,32 @@ async function warmCaches() {
   // ── Warm MNG tenant caches in background (phase 3) ──────────────────────────
   const mngTenants = db.prepare("SELECT tenant_id, timezone FROM tenants WHERE tenant_id != '617thc' AND active = 1").all();
   if (mngTenants.length) {
-    console.log(`[warmup] Phase 3: warming ${mngTenants.length} additional tenant(s)...`);
-    for (const t of mngTenants) {
-      const tz = t.timezone || 'America/Los_Angeles';
-      const today = new Date().toLocaleDateString('en-CA', {timeZone: tz});
-      // Fetch from inception (2026-01-01 for MNG) so new-vs-returning is accurate
-      const inceptionDate = t.inception_date || '2026-01-01';
-      reqCtx.run({tenantId: t.tenant_id}, () => {
-        fetchInventory().catch(e => console.error(`[warmup:${t.tenant_id}] inv error:`, e.message));
-        fetchAllOrdersCached(inceptionDate, today)
-          .then(() => console.log(`[warmup:${t.tenant_id}] full order history ready (since ${inceptionDate})`))
-          .catch(e => console.error(`[warmup:${t.tenant_id}] orders error:`, e.message));
-        fetchAllCustomers().catch(e => console.error(`[warmup:${t.tenant_id}] cust error:`, e.message));
-      });
-    }
+    console.log(`[warmup] Phase 3: warming ${mngTenants.length} additional tenant(s) (staggered)...`);
+    // Stagger tenant warmup — one at a time with a 30s gap to avoid OOM on Mac Mini.
+    // Full order history fetch is the heavy part; inventory is fast and runs immediately.
+    (async () => {
+      for (let idx = 0; idx < mngTenants.length; idx++) {
+        const t = mngTenants[idx];
+        const tz = t.timezone || 'America/Los_Angeles';
+        const today = new Date().toLocaleDateString('en-CA', {timeZone: tz});
+        const inceptionDate = t.inception_date || '2026-01-01';
+        // Inventory is fast — fire immediately for all stores
+        reqCtx.run({tenantId: t.tenant_id}, () => {
+          fetchInventory().catch(e => console.error(`[warmup:${t.tenant_id}] inv error:`, e.message));
+        });
+        // Stagger order history fetches — wait for previous tenant before starting next
+        if (idx > 0) await new Promise(r => setTimeout(r, 30000));
+        console.log(`[warmup:${t.tenant_id}] starting order history fetch (since ${inceptionDate})...`);
+        await new Promise(resolve => {
+          reqCtx.run({tenantId: t.tenant_id}, () => {
+            fetchAllOrdersCached(inceptionDate, today)
+              .then(() => { console.log(`[warmup:${t.tenant_id}] full order history ready`); resolve(); })
+              .catch(e => { console.error(`[warmup:${t.tenant_id}] orders error:`, e.message); resolve(); });
+          });
+        });
+      }
+      console.log('[warmup] Phase 3 complete — all tenants warmed');
+    })().catch(e => console.error('[warmup] Phase 3 error:', e.message));
   }
 
   // Proactive background poll — keeps today's orders current even when nobody is on the dashboard
