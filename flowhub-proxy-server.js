@@ -1584,13 +1584,14 @@ async function fetchInventoryForTenant(tenantId) {
   for (const row of allData) {
     const id = row.productId || row.variantId || row.productName;
     if (!byId[id]) {
-      byId[id] = Object.assign({}, row, {quantity: 0, floorQuantity: 0, vaultQuantity: 0, otherRoomQuantity: 0, roomBreakdown: {}});
+      byId[id] = Object.assign({}, row, {quantity: 0, floorQuantity: 0, vaultQuantity: 0, promoQuantity: 0, otherRoomQuantity: 0, roomBreakdown: {}});
     }
     const qty = parseInt(row.quantity || 0);
     byId[id].quantity += qty;
     const rn = (row.roomName || '').toLowerCase();
     if (rn === 'sales floor') byId[id].floorQuantity += qty;
     else if (rn === 'vault' || rn === 'moon room' || rn === 'backstock' || rn === 'back stock') byId[id].vaultQuantity += qty;
+    else if (rn === 'promo' || rn === 'promos' || rn === 'backstock promos' || rn === 'salesfloor promos' || rn === 'on-hand audit needed') byId[id].promoQuantity += qty;
     else byId[id].otherRoomQuantity += qty;
     byId[id].roomBreakdown[row.roomName || 'Unknown'] = (byId[id].roomBreakdown[row.roomName || 'Unknown'] || 0) + qty;
   }
@@ -1604,6 +1605,7 @@ async function fetchInventoryForTenant(tenantId) {
       byName[key].quantity          += p.quantity;
       byName[key].floorQuantity     += p.floorQuantity;
       byName[key].vaultQuantity     += p.vaultQuantity;
+      byName[key].promoQuantity     += p.promoQuantity;
       byName[key].otherRoomQuantity += p.otherRoomQuantity;
       if (p.createdAt && (!byName[key].createdAt || p.createdAt > byName[key].createdAt)) {
         byName[key].createdAt     = p.createdAt;
@@ -3066,6 +3068,7 @@ async function computeInventorySearch(keyword, includeOutOfStock) {
         totalQuantity:     parseInt(p.quantity || 0),
         floorQuantity:     parseInt(p.floorQuantity || 0),
         vaultQuantity:     parseInt(p.vaultQuantity || 0),
+        promoQuantity:     parseInt(p.promoQuantity || 0),
         otherRoomQuantity: parseInt(p.otherRoomQuantity || 0),
         roomBreakdown:     p.roomBreakdown || {},
         price:             p.preTaxPriceInPennies ? +(p.preTaxPriceInPennies / 100).toFixed(2) : (p.postTaxPriceInPennies ? +(p.postTaxPriceInPennies / 100).toFixed(2) : null),

@@ -61,37 +61,42 @@ export function renderInventoryHTML() {
   return h;
 }
 
-function renderInvSummary(products) {
+function renderInvSummary(products, hasPromo) {
   var is617 = products.filter(function(p) { return (p.brand || '').toLowerCase().includes('617'); });
   var other = products.filter(function(p) { return !(p.brand || '').toLowerCase().includes('617'); });
   function totals(arr) {
     return {
       floor: arr.reduce(function(s,p){ return s + (p.floorQuantity||0); }, 0),
-      vault: arr.reduce(function(s,p){ return s + (p.vaultQuantity||0); }, 0)
+      vault: arr.reduce(function(s,p){ return s + (p.vaultQuantity||0); }, 0),
+      promo: arr.reduce(function(s,p){ return s + (p.promoQuantity||0); }, 0)
     };
   }
   var t617 = totals(is617), tOther = totals(other);
-  var h = '<div style="display:grid;grid-template-columns:1fr 52px 52px;gap:6px;margin-bottom:12px;padding-bottom:10px;border-bottom:2px solid #2e2e2e">';
+  var sumCols = hasPromo ? '1fr 52px 52px 52px' : '1fr 52px 52px';
+  var h = '<div style="display:grid;grid-template-columns:' + sumCols + ';gap:6px;margin-bottom:12px;padding-bottom:10px;border-bottom:2px solid #2e2e2e">';
   h += '<div style="font-size:11px;color:#555;text-transform:uppercase;letter-spacing:.1em;padding-bottom:4px;grid-column:1/-1">Unit Totals</div>';
   h += '<div style="font-size:13px;color:#f0e8d8;font-weight:600">617 Brands</div>';
   h += '<div style="text-align:right;font-size:13px;font-weight:700;color:#f0e8d8">' + t617.floor.toLocaleString() + '</div>';
   h += '<div style="text-align:right;font-size:13px;font-weight:700;color:#c8922a">' + t617.vault.toLocaleString() + '</div>';
+  if (hasPromo) h += '<div style="text-align:right;font-size:13px;font-weight:700;color:#5ba4cf">' + t617.promo.toLocaleString() + '</div>';
   h += '<div style="font-size:13px;color:#888">Other Brands</div>';
   h += '<div style="text-align:right;font-size:13px;color:#aaa">' + tOther.floor.toLocaleString() + '</div>';
   h += '<div style="text-align:right;font-size:13px;color:#7a5c1e">' + tOther.vault.toLocaleString() + '</div>';
+  if (hasPromo) h += '<div style="text-align:right;font-size:13px;color:#3d7a9e">' + tOther.promo.toLocaleString() + '</div>';
   h += '</div>';
   return h;
 }
 
-function renderInvRow(p) {
-  var total = (p.floorQuantity || 0) + (p.vaultQuantity || 0);
+function renderInvRow(p, hasPromo) {
+  var total = (p.floorQuantity || 0) + (p.vaultQuantity || 0) + (hasPromo ? (p.promoQuantity || 0) : 0);
   var qCls = total <= 10 ? 'red' : total <= 20 ? 'amber' : 'green';
-  var vCls = p.vaultQuantity > 0 ? 'green' : 'color:#444';
   var price = p.price ? '$' + p.price.toFixed(2) : '\u2014';
-  var r = '<div class="modal-inv-row">';
+  var rowGrid = hasPromo ? 'grid-template-columns:1fr 52px 52px 52px 55px' : '';
+  var r = '<div class="modal-inv-row"' + (rowGrid ? ' style="' + rowGrid + '"' : '') + '>';
   r += '<div><div class="inv-name">' + esc(shortName(p.name)) + '</div>' + (p.brand ? '<div class="inv-brand">' + esc(p.brand) + '</div>' : '') + '</div>';
   r += '<div class="inv-qty ' + qCls + '">' + (p.floorQuantity || 0) + '</div>';
   r += '<div class="inv-qty" style="text-align:right;' + (p.vaultQuantity > 0 ? 'color:#c8922a' : 'color:#444') + '">' + (p.vaultQuantity || 0) + '</div>';
+  if (hasPromo) r += '<div class="inv-qty" style="text-align:right;' + ((p.promoQuantity || 0) > 0 ? 'color:#5ba4cf' : 'color:#444') + '">' + (p.promoQuantity || 0) + '</div>';
   r += '<div class="inv-price">' + price + '</div>';
   r += '</div>';
   return r;
@@ -131,23 +136,27 @@ function _catSortBy(col) { _catSortAsc = _catSortCol === col ? !_catSortAsc : fa
 function renderCategoryModal() {
   var catName  = _catSortName;
   var all      = state.SD.allProducts.filter(function(p) { return p.category === catName; });
+  var hasPromo = all.some(function(p) { return (p.promoQuantity || 0) > 0; });
   var inStock  = all.filter(function(p) { return p.quantity > 0; }).sort(function(a,b) {
-    var av = _catSortCol === 'vault' ? a.vaultQuantity : a.floorQuantity;
-    var bv = _catSortCol === 'vault' ? b.vaultQuantity : b.floorQuantity;
+    var av = _catSortCol === 'vault' ? a.vaultQuantity : _catSortCol === 'promo' ? a.promoQuantity : a.floorQuantity;
+    var bv = _catSortCol === 'vault' ? b.vaultQuantity : _catSortCol === 'promo' ? b.promoQuantity : b.floorQuantity;
     return _catSortAsc ? av - bv : bv - av;
   });
   var outStock = all.filter(function(p) { return p.quantity === 0; }).sort(function(a,b) { return a.name.localeCompare(b.name); });
   var fa = _catSortCol === 'floor' ? (_catSortAsc ? ' &#9650;' : ' &#9660;') : '';
   var va = _catSortCol === 'vault' ? (_catSortAsc ? ' &#9650;' : ' &#9660;') : '';
-  var h = renderInvSummary(all);
-  h += '<div class="modal-inv-hd"><span>Product</span>'
+  var pa = _catSortCol === 'promo' ? (_catSortAsc ? ' &#9650;' : ' &#9660;') : '';
+  var hdGrid = hasPromo ? 'grid-template-columns:1fr 52px 52px 52px 55px' : '';
+  var h = renderInvSummary(all, hasPromo);
+  h += '<div class="modal-inv-hd"' + (hdGrid ? ' style="' + hdGrid + '"' : '') + '><span>Product</span>'
     + '<span style="text-align:right;cursor:pointer;user-select:none" onclick="_catSortBy(\'floor\')">Floor' + fa + '</span>'
     + '<span style="text-align:right;color:#c8922a;cursor:pointer;user-select:none" onclick="_catSortBy(\'vault\')">Vault' + va + '</span>'
+    + (hasPromo ? '<span style="text-align:right;color:#5ba4cf;cursor:pointer;user-select:none" onclick="_catSortBy(\'promo\')">Promos' + pa + '</span>' : '')
     + '<span style="text-align:right">Price</span></div>';
-  inStock.forEach(function(p) { h += renderInvRow(p); });
+  inStock.forEach(function(p) { h += renderInvRow(p, hasPromo); });
   if (outStock.length) {
     h += '<div style="margin:14px 0 8px;padding:6px 0;border-top:1px solid #2e2e2e;border-bottom:1px solid #2e2e2e;font-size:12px;color:#555;text-transform:uppercase;letter-spacing:.12em">Out of Stock \u2014 ' + outStock.length + ' SKU' + (outStock.length !== 1 ? 's' : '') + '</div>';
-    outStock.forEach(function(p) { h += renderInvRow(p); });
+    outStock.forEach(function(p) { h += renderInvRow(p, hasPromo); });
   }
   document.getElementById('modalTitle').textContent = catName + ' \u2014 ' + inStock.length + ' in stock / ' + all.length + ' total SKUs';
   document.getElementById('modalBody').innerHTML = h;
@@ -166,23 +175,27 @@ function renderSizeModal() {
   var sizeLabel = _szSortLabel;
   var wi = (state.SD.weightItems || []).find(function(w) { return w.label === sizeLabel; });
   var all = wi ? (wi.products || []) : [];
+  var hasPromo = all.some(function(p) { return (p.promoQuantity || 0) > 0; });
   var inStock  = all.filter(function(p) { return p.quantity > 0; }).sort(function(a,b) {
-    var av = _szSortCol === 'vault' ? a.vaultQuantity : a.floorQuantity;
-    var bv = _szSortCol === 'vault' ? b.vaultQuantity : b.floorQuantity;
+    var av = _szSortCol === 'vault' ? a.vaultQuantity : _szSortCol === 'promo' ? a.promoQuantity : a.floorQuantity;
+    var bv = _szSortCol === 'vault' ? b.vaultQuantity : _szSortCol === 'promo' ? b.promoQuantity : b.floorQuantity;
     return _szSortAsc ? av - bv : bv - av;
   });
   var outStock = all.filter(function(p) { return p.quantity === 0; }).sort(function(a,b) { return a.name.localeCompare(b.name); });
   var fa = _szSortCol === 'floor' ? (_szSortAsc ? ' &#9650;' : ' &#9660;') : '';
   var va = _szSortCol === 'vault' ? (_szSortAsc ? ' &#9650;' : ' &#9660;') : '';
-  var h = renderInvSummary(all);
-  h += '<div class="modal-inv-hd"><span>Product</span>'
+  var pa = _szSortCol === 'promo' ? (_szSortAsc ? ' &#9650;' : ' &#9660;') : '';
+  var hdGrid = hasPromo ? 'grid-template-columns:1fr 52px 52px 52px 55px' : '';
+  var h = renderInvSummary(all, hasPromo);
+  h += '<div class="modal-inv-hd"' + (hdGrid ? ' style="' + hdGrid + '"' : '') + '><span>Product</span>'
     + '<span style="text-align:right;cursor:pointer;user-select:none" onclick="_szSortBy(\'floor\')">Floor' + fa + '</span>'
     + '<span style="text-align:right;color:#c8922a;cursor:pointer;user-select:none" onclick="_szSortBy(\'vault\')">Vault' + va + '</span>'
+    + (hasPromo ? '<span style="text-align:right;color:#5ba4cf;cursor:pointer;user-select:none" onclick="_szSortBy(\'promo\')">Promos' + pa + '</span>' : '')
     + '<span style="text-align:right">Price</span></div>';
-  inStock.forEach(function(p) { h += renderInvRow(p); });
+  inStock.forEach(function(p) { h += renderInvRow(p, hasPromo); });
   if (outStock.length) {
     h += '<div style="margin:14px 0 8px;padding:6px 0;border-top:1px solid #2e2e2e;border-bottom:1px solid #2e2e2e;font-size:12px;color:#555;text-transform:uppercase;letter-spacing:.12em">Out of Stock \u2014 ' + outStock.length + ' SKU' + (outStock.length !== 1 ? 's' : '') + '</div>';
-    outStock.forEach(function(p) { h += renderInvRow(p); });
+    outStock.forEach(function(p) { h += renderInvRow(p, hasPromo); });
   }
   document.getElementById('modalTitle').textContent = sizeLabel + ' \u2014 ' + inStock.length + ' in stock / ' + all.length + ' total SKUs';
   document.getElementById('modalBody').innerHTML = h;
